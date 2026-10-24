@@ -355,11 +355,19 @@ fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
 }
 
 impl<'a> UserRepo<'a> {
-
     pub async fn load_profile_bundle(
         &self,
         user_id: Uuid,
-    ) -> AppResult<Option<(UserRow, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+    ) -> AppResult<
+        Option<(
+            UserRow,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )>,
+    > {
         #[derive(sqlx::FromRow)]
         struct Bundle {
             id: Uuid,

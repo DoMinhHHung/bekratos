@@ -9,7 +9,6 @@ use identity::modules::session::repo::{RefreshTokenRepo, SessionRepo};
 use identity::modules::token::repo::TokenRepo;
 use identity::modules::user::repo::UserRepo;
 use sqlx::PgPool;
-use std::env;
 use tokio::sync::Barrier;
 use uuid::Uuid;
 
@@ -533,10 +532,7 @@ async fn expired_account_purge_obeys_batch_limit_and_is_idempotent() {
 #[tokio::test]
 async fn redis_rate_limit_enforces_limit_and_fails_closed() {
     common::load_test_env();
-    let Some(redis_url) = env::var("REDIS_URL_TEST")
-        .ok()
-        .filter(|url| !url.is_empty())
-    else {
+    let Some(redis_url) = common::test_redis_url() else {
         eprintln!("REDIS_URL_TEST not set; skipping Redis rate-limit test");
         return;
     };
@@ -563,7 +559,6 @@ async fn redis_rate_limit_enforces_limit_and_fails_closed() {
     };
     assert!(matches!(unavailable, AppError::Unavailable));
 }
-
 
 #[tokio::test]
 async fn sent_tokens_are_not_reclaimed_after_mark_sent() {

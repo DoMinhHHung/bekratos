@@ -35,7 +35,6 @@ pub struct Config {
     pub session_ttl_secs: i64,
 }
 
-
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")

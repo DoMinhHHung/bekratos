@@ -32,7 +32,6 @@ where
     .map_err(|_| AppError::Internal)?
 }
 
-
 use super::dto::{LoginRequest, LoginResponse, RegisterRequest};
 
 const NEUTRAL_REGISTER_MSG: &str =
@@ -838,7 +837,8 @@ pub async fn change_password(
         .ok_or(AppError::Unauthorized)?;
 
     let policy_v = policy.clone();
-    let current_ok = with_argon_permit(state, move || policy_v.verify(&current, &current_hash)).await?;
+    let current_ok =
+        with_argon_permit(state, move || policy_v.verify(&current, &current_hash)).await?;
 
     if !current_ok {
         return Err(AppError::Unauthorized);

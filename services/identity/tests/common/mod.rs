@@ -37,6 +37,7 @@ pub fn test_database_url() -> Option<String> {
     require_or_skip("DATABASE_URL_TEST")
 }
 
+#[allow(dead_code)]
 pub fn test_redis_url() -> Option<String> {
     require_or_skip("REDIS_URL_TEST")
 }

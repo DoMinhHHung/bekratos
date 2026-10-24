@@ -8,11 +8,7 @@ use crate::modules::user::dto::{
 use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
 
-
-async fn require_active_session(
-    state: &AppState,
-    access_token: &str,
-) -> AppResult<(Uuid, Uuid)> {
+async fn require_active_session(state: &AppState, access_token: &str) -> AppResult<(Uuid, Uuid)> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
@@ -38,7 +34,6 @@ async fn require_active_session(
 
     Ok((user_id, session_id))
 }
-
 
 pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<ProfileResponse> {
     let (user_id, _) = require_active_session(state, access_token).await?;

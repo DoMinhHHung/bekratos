@@ -11,15 +11,12 @@ use p256::ecdsa::SigningKey;
 use p256::pkcs8::{EncodePrivateKey, LineEnding};
 use rand::rngs::OsRng;
 use sqlx::PgPool;
-use std::env;
 use std::time::Duration;
 use uuid::Uuid;
 
 async fn test_state(pool: PgPool) -> Option<AppState> {
     common::load_test_env();
-    let redis_url = env::var("REDIS_URL_TEST")
-        .ok()
-        .filter(|value| !value.is_empty())?;
+    let redis_url = common::test_redis_url()?;
     let manager = redis::connect(&redis_url)
         .await
         .expect("connect to REDIS_URL_TEST");
@@ -69,6 +66,7 @@ async fn test_state(pool: PgPool) -> Option<AppState> {
         argon2_memory_kib: 19_456,
         argon2_iterations: 2,
         argon2_parallelism: 1,
+        argon2_max_concurrent: 2,
         jwt_signing_key_pem: private_pem.to_string(),
         jwt_kid: "test-signing-key".into(),
         jwt_issuer: "test-issuer".into(),
