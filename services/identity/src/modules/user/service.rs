@@ -39,21 +39,21 @@ pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<Prof
     let (user_id, _) = require_active_session(state, access_token).await?;
 
     let repo = UserRepo::new(&state.db);
-    let (user, full_name, display_name, avatar_url, email, username) = repo
+    let bundle = repo
         .load_profile_bundle(user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
 
     Ok(ProfileResponse {
         id: user_id,
-        status: user.status,
-        email,
-        username,
-        full_name,
-        display_name,
-        avatar_url,
-        locale: user.locale,
-        timezone: user.timezone,
+        status: bundle.user.status,
+        email: bundle.email,
+        username: bundle.username,
+        full_name: bundle.full_name,
+        display_name: bundle.display_name,
+        avatar_url: bundle.avatar_url,
+        locale: bundle.user.locale,
+        timezone: bundle.user.timezone,
     })
 }
 
