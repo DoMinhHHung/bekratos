@@ -94,7 +94,7 @@ impl MagicLinkSigner {
         let msg = Self::canonical_message(purpose, token_id);
         let expected = Self::mac_hex(&key.secret, &msg)?;
 
-        let ok = expected.as_bytes().ct_eq(presented_mac.as_bytes()).into();
+        let ok: bool = expected.as_bytes().ct_eq(presented_mac.as_bytes()).into();
         if !ok {
             return Err(AppError::BadRequest("invalid token".into()));
         }

@@ -1,4 +1,5 @@
-use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use identity::infra::db;
 use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
@@ -6,7 +7,6 @@ use identity::infra::password::PasswordPolicy;
 use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
 use identity::jobs::email_worker::{EmailWorker, EmailWorkerConfig};
 use identity::{build_router, AppState, Config};
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
@@ -28,6 +28,31 @@ async fn main() {
         }
     };
 
+    if let Err(e) = PasswordPolicy::new(
+        config.argon2_memory_kib,
+        config.argon2_iterations,
+        config.argon2_parallelism,
+    ) {
+        tracing::error!(error = %e, "invalid argon2 configuration");
+        std::process::exit(1);
+    }
+
+    let hmac_keys = match parse_hmac_keys(&config.magic_link_hmac_keys) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid MAGIC_LINK_HMAC_KEYS");
+            std::process::exit(1);
+        }
+    };
+
+    let signer = match MagicLinkSigner::new(hmac_keys, config.magic_link_active_kid.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid magic link signer config");
+            std::process::exit(1);
+        }
+    };
+
     let pool = match db::connect(&config.database_url).await {
         Ok(p) => p,
         Err(e) => {
@@ -40,38 +65,6 @@ async fn main() {
         tracing::error!(error = %e, "failed to run migrations");
         std::process::exit(1);
     }
-
-    let addr: SocketAddr = config.bind_addr;
-    let state = AppState::new(config, pool);
-    let app = build_router(state);
-
-    let listener = match TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!(error = %e, %addr, "failed to bind");
-            std::process::exit(1);
-        }
-    };
-
-    tracing::info!(%addr, "identity service listening");
-
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
-
-    if let Err(e) = server.await {
-        tracing::error!(error = %e, "server error");
-        std::process::exit(1);
-    }
-
-    let _password_policy = PasswordPolicy::new(
-        config.argon2_memory_kib,
-        config.argon2_iterations,
-        config.argon2_parallelism,
-    )
-    .expect("argon2 config");
-
-    let hmac_keys = parse_hmac_keys(&config.magic_link_hmac_keys).expect("hmac keys");
-    let signer = MagicLinkSigner::new(hmac_keys, config.magic_link_active_kid.clone())
-        .expect("magic link signer");
 
     let mailer: Arc<dyn Mailer> = match config.mail_provider.as_str() {
         "console" => Arc::new(ConsoleMailer {
@@ -98,6 +91,30 @@ async fn main() {
     tokio::spawn(async move {
         worker.run(shutdown_rx).await;
     });
+
+    let addr = config.bind_addr;
+    let state = AppState::new(config, pool);
+    let app = build_router(state);
+
+    let listener = match TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!(error = %e, %addr, "failed to bind");
+            std::process::exit(1);
+        }
+    };
+
+    tracing::info!(%addr, "identity service listening");
+
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+
+    if let Err(e) = server.await {
+        tracing::error!(error = %e, "server error");
+        std::process::exit(1);
+    }
 }
 
 async fn shutdown_signal() {
@@ -122,6 +139,6 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    let _ = shutdown_tx.send(true);
+
     tracing::info!("shutdown signal received");
 }
