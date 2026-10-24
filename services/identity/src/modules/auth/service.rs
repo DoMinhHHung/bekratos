@@ -187,6 +187,36 @@ async fn handle_register_conflict(state: &AppState, _ip: &str, email: &str) -> A
     Ok(NEUTRAL_REGISTER_MSG.to_string())
 }
 
+pub async fn verify_email(state: &AppState, ip: &str, token: &str) -> AppResult<String> {
+    state
+        .rate_limiter
+        .check_and_incr("verify_email", "ip", ip, 30, 600)
+        .await?;
+
+    let token_id = state
+        .magic_link_signer
+        .verify("email_verify", token)
+        .map_err(|_| AppError::BadRequest("invalid token".into()))?;
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin verify-email transaction failed");
+        AppError::Internal
+    })?;
+
+    let consumed = TokenRepo::consume_tx(&mut tx, token_id, "email_verify")
+        .await?
+        .ok_or_else(|| AppError::BadRequest("invalid token".into()))?;
+
+    UserRepo::activate_verified_email_tx(&mut tx, consumed.user_id, &consumed.email).await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit verify-email transaction failed");
+        AppError::Internal
+    })?;
+
+    Ok("Email verified.".to_string())
+}
+
 #[allow(dead_code)]
 fn hash_document(content: &str) -> String {
     let mut hasher = Sha256::new();

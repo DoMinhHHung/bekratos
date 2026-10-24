@@ -5,13 +5,15 @@ use axum::routing::post;
 use axum::{Json, Router};
 use validator::Validate;
 
-use super::dto::{RegisterRequest, RegisterResponse};
+use super::dto::{RegisterRequest, RegisterResponse, VerifyEmailRequest, VerifyEmailResponse};
 use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/v1/auth/register", post(register))
+    Router::new()
+        .route("/v1/auth/register", post(register))
+        .route("/v1/auth/verify-email", post(verify_email))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -29,4 +31,16 @@ async fn register(
     let ip = client_ip(addr);
     let message = service::register(&state, &ip, body).await?;
     Ok(Json(RegisterResponse { message }))
+}
+
+async fn verify_email(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<VerifyEmailRequest>,
+) -> Result<Json<VerifyEmailResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::verify_email(&state, &ip, &body.token).await?;
+    Ok(Json(VerifyEmailResponse { message }))
 }
