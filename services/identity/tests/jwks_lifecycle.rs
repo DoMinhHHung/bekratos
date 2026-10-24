@@ -13,16 +13,16 @@ async fn database_key_bootstrap_and_rotation_preserve_publishable_overlap() {
         eprintln!("DATABASE_URL_TEST not set; skipping JWKS lifecycle test");
         return;
     };
-    let encryption_key = "phase10-test-key-encryption-material-0001";
+    let encryption_key = hex::encode(rand::random::<[u8; 32]>());
     let previous_active = JwksRepo::find_active(&pool)
         .await
         .expect("find preexisting active key");
-    let initial = ensure_active_key(&pool, encryption_key)
+    let initial = ensure_active_key(&pool, &encryption_key)
         .await
         .expect("ensure an active signing key");
     assert_eq!(initial.status, "active");
 
-    let encryptor = KeyEncryptor::new(encryption_key).expect("create test key encryptor");
+    let encryptor = KeyEncryptor::new(&encryption_key).expect("create test key encryptor");
     let initial_private_pem =
         decrypt_private_pem(&encryptor, &initial).expect("decrypt active private key");
     let initial_signer = JwtSigner::from_pem(
@@ -35,7 +35,7 @@ async fn database_key_bootstrap_and_rotation_preserve_publishable_overlap() {
     .expect("build signer from stored key");
     assert_eq!(initial_signer.kid(), initial.kid);
 
-    let rotated = create_and_activate_key(&pool, encryption_key)
+    let rotated = create_and_activate_key(&pool, &encryption_key)
         .await
         .expect("rotate active signing key");
     assert_ne!(rotated.id, initial.id);
