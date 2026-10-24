@@ -28,6 +28,9 @@ pub enum AppError {
 
     #[error("conflict")]
     Conflict,
+
+    #[error("unauthorized")]
+    Unauthorized,
 }
 
 impl AppError {
@@ -44,6 +47,7 @@ impl AppError {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
             Self::Conflict => StatusCode::CONFLICT,
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
         }
     }
 
@@ -56,6 +60,7 @@ impl AppError {
             Self::BadRequest(_) => "bad_request",
             Self::TooManyRequests => "too_many_requests",
             Self::Conflict => "conflict",
+            Self::Unauthorized => "unauthorized",
         }
     }
 
@@ -68,6 +73,7 @@ impl AppError {
             Self::BadRequest(msg) => msg.clone(),
             Self::TooManyRequests => "too many requests".to_string(),
             Self::Conflict => "conflict".to_string(),
+            Self::Unauthorized => "unauthorized".to_string(),
         }
     }
 }

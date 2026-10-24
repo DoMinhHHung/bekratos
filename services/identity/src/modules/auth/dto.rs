@@ -41,3 +41,25 @@ pub struct ResendVerificationRequest {
 pub struct ResendVerificationResponse {
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct LoginRequest {
+    #[validate(length(min = 3, max = 254, message = "invalid login"))]
+    pub login: String,
+    #[validate(length(min = 8, max = 128, message = "invalid password"))]
+    pub password: String,
+    pub device_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LoginResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LogoutResponse {
+    pub message: String,
+}

@@ -1,13 +1,14 @@
 use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, State};
+use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
 use validator::Validate;
 
 use super::dto::{
-    RegisterRequest, RegisterResponse, ResendVerificationRequest, ResendVerificationResponse,
-    VerifyEmailRequest, VerifyEmailResponse,
+    LoginRequest, LoginResponse, LogoutResponse, RegisterRequest, RegisterResponse,
+    ResendVerificationRequest, ResendVerificationResponse, VerifyEmailRequest, VerifyEmailResponse,
 };
 use super::service;
 use crate::error::AppError;
@@ -18,11 +19,28 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/verify-email", post(verify_email))
         .route("/v1/auth/resend-verification", post(resend_verification))
+        .route("/v1/auth/login", post(login))
+        .route("/v1/auth/logout", post(logout))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
     addr.map(|a| a.0.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::Unauthorized)?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))
+        .ok_or(AppError::Unauthorized)?;
+    if token.is_empty() {
+        return Err(AppError::Unauthorized);
+    }
+    Ok(token)
 }
 
 async fn register(
@@ -59,4 +77,31 @@ async fn resend_verification(
     let ip = client_ip(addr);
     let message = service::resend_verification(&state, &ip, &body.email).await?;
     Ok(Json(ResendVerificationResponse { message }))
+}
+
+async fn login(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Result<Json<LoginResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let ua = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+    let resp = service::login(&state, &ip, ua, body).await?;
+    Ok(Json(resp))
+}
+
+async fn logout(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+) -> Result<Json<LogoutResponse>, AppError> {
+    let token = extract_bearer(&headers)?;
+    let ip = client_ip(addr);
+    let message = service::logout(&state, token, &ip).await?;
+    Ok(Json(LogoutResponse { message }))
 }
