@@ -35,10 +35,13 @@ pub struct SessionRepo<'a> {
 }
 
 impl<'a> SessionRepo<'a> {
+    /// Gắn repository phiên với pool PostgreSQL được cấp; chưa thực hiện truy vấn.
     pub fn new(pool: &'a PgPool) -> Self {
         Self { pool }
     }
 
+    /// Tạo và trả bản ghi phiên trong transaction với thời điểm hết hạn UTC được cấp.
+    /// Không tạo refresh token; lỗi cơ sở dữ liệu trả `Internal`.
     pub async fn insert_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -73,6 +76,8 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    /// Lấy phiên theo ID, kể cả đã hết hạn hoặc bị thu hồi; không có thì trả `None`.
+    /// Lỗi truy vấn trả `Internal`.
     pub async fn find_by_id(&self, id: Uuid) -> AppResult<Option<SessionRow>> {
         sqlx::query_as::<_, SessionRow>(
             r#"
@@ -92,6 +97,8 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    /// Liệt kê phiên chưa thu hồi và có hạn dùng lớn hơn thời điểm hiện tại của PostgreSQL,
+    /// theo lần hoạt động gần nhất trước; lỗi truy vấn trả `Internal`.
     pub async fn list_active_for_user(&self, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
         sqlx::query_as::<_, SessionRow>(
             r#"
@@ -114,6 +121,8 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    /// Lấy và khóa hàng phiên đến khi transaction kết thúc, không lọc trạng thái hay hạn dùng.
+    /// Trả `None` nếu không có phiên, `Internal` nếu truy vấn thất bại.
     pub async fn find_by_id_for_update_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -137,6 +146,9 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    /// Thu hồi phiên chưa bị thu hồi với lý do được cấp trong transaction, trả số hàng đổi.
+    /// Không có phiên hoặc đã thu hồi thì trả 0; lỗi truy vấn trả `Internal`.
+    /// Hàm không thu hồi refresh token của phiên.
     pub async fn revoke_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -160,6 +172,8 @@ impl<'a> SessionRepo<'a> {
         Ok(res.rows_affected())
     }
 
+    /// Cập nhật lần hoạt động gần nhất của phiên chưa thu hồi trong transaction.
+    /// Không có hàng phù hợp vẫn thành công; lỗi truy vấn trả `Internal`.
     pub async fn touch_last_seen_tx(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> AppResult<()> {
         sqlx::query(
             r#"
@@ -178,6 +192,9 @@ impl<'a> SessionRepo<'a> {
         Ok(())
     }
 
+    /// Thu hồi các phiên chưa thu hồi của người dùng trong transaction, trả số hàng đổi.
+    /// `except_session_id` giữ lại phiên được chỉ định; `None` không giữ lại phiên nào.
+    /// Không thu hồi refresh token; lỗi truy vấn trả `Internal`.
     pub async fn revoke_all_for_user_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -223,6 +240,9 @@ impl<'a> SessionRepo<'a> {
 pub struct RefreshTokenRepo;
 
 impl RefreshTokenRepo {
+    /// Lưu và trả bản ghi refresh token trong transaction; `token_hash` là hash đã tính sẵn.
+    /// `parent_id` chỉ token được thay thế, hoặc `None` cho token đầu tiên của phiên.
+    /// Lỗi cơ sở dữ liệu, kể cả vi phạm tính duy nhất, trả `Internal`.
     pub async fn insert_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -255,6 +275,8 @@ impl RefreshTokenRepo {
         })
     }
 
+    /// Lấy và khóa refresh token theo hash đến khi transaction kết thúc, kể cả token đã dùng,
+    /// đã thu hồi hay hết hạn. Không có thì trả `None`; lỗi truy vấn trả `Internal`.
     pub async fn find_by_hash_for_update_tx(
         tx: &mut Transaction<'_, Postgres>,
         token_hash: &str,
@@ -278,6 +300,8 @@ impl RefreshTokenRepo {
         })
     }
 
+    /// Đánh dấu refresh token chưa dùng và chưa thu hồi là đã dùng trong transaction.
+    /// Không có hàng phù hợp vẫn thành công; lỗi truy vấn trả `Internal`.
     pub async fn mark_used_tx(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> AppResult<()> {
         sqlx::query(
             r#"
@@ -296,6 +320,8 @@ impl RefreshTokenRepo {
         Ok(())
     }
 
+    /// Thu hồi mọi refresh token chưa thu hồi của phiên trong transaction, trả số hàng đổi.
+    /// Bao gồm token đã dùng hoặc hết hạn; lỗi truy vấn trả `Internal`.
     pub async fn revoke_all_for_session_tx(
         tx: &mut Transaction<'_, Postgres>,
         session_id: Uuid,
@@ -317,6 +343,9 @@ impl RefreshTokenRepo {
         Ok(res.rows_affected())
     }
 
+    /// Thu hồi refresh token chưa thu hồi thuộc các phiên của người dùng, trả số hàng đổi.
+    /// Nếu có `except_session_id`, giữ nguyên token của phiên đó; `None` thu hồi tất cả.
+    /// Lỗi truy vấn trả `Internal`.
     pub async fn revoke_all_for_user_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,

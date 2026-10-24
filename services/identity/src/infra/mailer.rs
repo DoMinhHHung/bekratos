@@ -11,6 +11,7 @@ pub struct OutboundEmail {
 
 #[async_trait]
 pub trait Mailer: Send + Sync {
+    /// Yêu cầu bộ gửi tiếp nhận thư; trả lỗi của bộ gửi cho bên gọi.
     async fn send(&self, email: OutboundEmail) -> AppResult<()>;
 }
 
@@ -20,6 +21,7 @@ pub struct ConsoleMailer {
 
 #[async_trait]
 impl Mailer for ConsoleMailer {
+    /// Chấp nhận thư trong chế độ console mà không gửi tới nhà cung cấp email.
     async fn send(&self, email: OutboundEmail) -> AppResult<()> {
         tracing::info!(
             from = %self.from,
@@ -35,6 +37,7 @@ pub struct NoopMailer;
 
 #[async_trait]
 impl Mailer for NoopMailer {
+    /// Luôn trả `Unavailable` vì chưa có bộ gửi email hoạt động.
     async fn send(&self, _email: OutboundEmail) -> AppResult<()> {
         Err(AppError::Unavailable)
     }

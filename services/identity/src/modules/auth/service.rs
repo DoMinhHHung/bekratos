@@ -13,6 +13,9 @@ use crate::modules::token::repo::TokenRepo;
 use crate::modules::user::repo::{NewPolicyAcceptance, UserRepo};
 use crate::state::AppState;
 
+/// Chờ suất xử lý Argon2 rồi chạy tác vụ đồng bộ ngoài luồng async, giữ suất đến khi xong.
+/// Truyền tiếp lỗi của tác vụ; semaphore đóng hoặc tác vụ không hoàn tất bình thường
+/// được chuyển thành `Internal`.
 async fn with_argon_permit<T, F>(state: &AppState, f: F) -> AppResult<T>
 where
     F: FnOnce() -> AppResult<T> + Send + 'static,
@@ -52,23 +55,33 @@ const PURGE_AFTER_DAYS: i64 = 30;
 const NEUTRAL_RESTORE_MSG: &str =
     "If a deleted account with that email exists and is within the restore window, a restore link will be sent.";
 
+/// Trả mẫu username gồm 3–30 ký tự ASCII chữ thường, chữ số, dấu gạch dưới hoặc dấu chấm.
 fn username_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^[a-z0-9_.]{3,30}$").expect("username regex"))
 }
 
+/// Bỏ khoảng trắng hai đầu và đổi chữ ASCII sang thường để tra cứu email.
 fn normalize_email(email: &str) -> String {
     email.trim().to_ascii_lowercase()
 }
 
+/// Bỏ khoảng trắng hai đầu và đổi chữ ASCII sang thường trước khi kiểm tra username.
 fn normalize_username(username: &str) -> String {
     username.trim().to_ascii_lowercase()
 }
 
+/// Chọn cách tra cứu theo email khi có `@`; không xác thực định dạng email.
 fn looks_like_email(s: &str) -> bool {
     s.contains('@')
 }
 
+/// Đăng ký tài khoản pending cùng hồ sơ, mật khẩu, chấp nhận chính sách và email xác minh
+/// có token 24 giờ trong một transaction. `ip` dùng để giới hạn yêu cầu và lưu ngữ cảnh.
+/// Trả thông điệp trung tính khi tạo thành công hoặc gặp xung đột tính duy nhất;
+/// với email của tài khoản pending, xung đột sẽ thay token xác minh đang có.
+/// Trả `BadRequest` nếu chưa chấp nhận chính sách, username sai hoặc mật khẩu ngoài 8–128 byte;
+/// `TooManyRequests` khi quá hạn mức, `Unavailable` khi Redis lỗi, `Internal` khi xử lý thất bại.
 pub async fn register(state: &AppState, ip: &str, body: RegisterRequest) -> AppResult<String> {
     if !body.accept_policy {
         return Err(AppError::BadRequest("accept_policy must be true".into()));
@@ -187,6 +200,9 @@ pub async fn register(state: &AppState, ip: &str, body: RegisterRequest) -> AppR
     }
 }
 
+/// Trả cùng thông điệp đăng ký trung tính sau xung đột; nếu email thuộc tài khoản pending,
+/// thu hồi token xác minh cũ và xếp hàng email mới với hạn 24 giờ.
+/// Lỗi truy vấn hoặc transaction được truyền ra dưới dạng `Internal`.
 async fn handle_register_conflict(state: &AppState, _ip: &str, email: &str) -> AppResult<String> {
     let user_repo = UserRepo::new(&state.db);
     if let Some((user, email_row)) = user_repo.find_by_email(email).await? {
@@ -220,6 +236,11 @@ async fn handle_register_conflict(state: &AppState, _ip: &str, email: &str) -> A
     Ok(NEUTRAL_REGISTER_MSG.to_string())
 }
 
+/// Dùng token xác minh một lần để kích hoạt tài khoản pending và xác minh email trong
+/// cùng transaction, rồi trả thông báo thành công. Token sai, hết hạn, đã dùng,
+/// đã thu hồi hoặc trạng thái tài khoản/email không phù hợp trả `BadRequest`.
+/// Trả `TooManyRequests` khi vượt hạn mức IP, `Unavailable` khi Redis lỗi,
+/// `Internal` khi truy vấn hoặc transaction thất bại.
 pub async fn verify_email(state: &AppState, ip: &str, token: &str) -> AppResult<String> {
     state
         .rate_limiter
@@ -250,6 +271,7 @@ pub async fn verify_email(state: &AppState, ip: &str, token: &str) -> AppResult<
     Ok("Email verified.".to_string())
 }
 
+/// Trả SHA-256 dạng hex thường của nội dung UTF-8 để nhận diện phiên bản tài liệu.
 #[allow(dead_code)]
 fn hash_document(content: &str) -> String {
     let mut hasher = Sha256::new();
@@ -257,6 +279,10 @@ fn hash_document(content: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Thay token xác minh đang có và xếp hàng email mới có hạn 24 giờ cho tài khoản pending.
+/// Trả cùng thông điệp trung tính khi email không tồn tại hoặc tài khoản không pending.
+/// Trả `TooManyRequests` khi vượt hạn mức IP/email, `Unavailable` khi Redis lỗi,
+/// `Internal` khi truy vấn hoặc transaction thất bại.
 pub async fn resend_verification(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
     let email = normalize_email(email_raw);
 
@@ -305,6 +331,12 @@ pub async fn resend_verification(state: &AppState, ip: &str, email_raw: &str) ->
     Ok(NEUTRAL_RESEND_MSG.to_string())
 }
 
+/// Đăng nhập bằng email hoặc username và mật khẩu cho tài khoản active, tạo phiên,
+/// refresh token và sự kiện bảo mật. IP, user-agent và tên thiết bị được lưu cùng phiên.
+/// Trả cặp token Bearer với `expires_in` tính bằng giây; refresh token không sống lâu hơn phiên.
+/// Trả `Unauthorized` nếu tài khoản hoặc mật khẩu không được chấp nhận,
+/// `TooManyRequests` khi quá hạn mức, `Unavailable` khi Redis lỗi, `Internal` khi xử lý lỗi.
+/// Phiên và refresh token đã được commit trước khi ký access token; lỗi ký không hủy chúng.
 pub async fn login(
     state: &AppState,
     ip: &str,
@@ -446,6 +478,10 @@ pub async fn login(
     })
 }
 
+/// Thu hồi phiên của JWT cùng mọi refresh token của phiên và ghi sự kiện đăng xuất.
+/// Trả thông báo thành công, hoặc `Unauthorized` nếu JWT/UUID sai, phiên thiếu,
+/// sai chủ sở hữu hay đã thu hồi. Không kiểm tra hạn phiên hoặc trạng thái người dùng tại đây.
+/// Lỗi xác thực do khóa đồng bộ, truy vấn và transaction được truyền ra dưới dạng `Internal`.
 pub async fn logout(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
 
@@ -487,6 +523,7 @@ pub async fn logout(state: &AppState, access_token: &str, ip: &str) -> AppResult
     Ok("Logged out.".to_string())
 }
 
+/// Cố gắng lưu sự kiện bảo mật cùng ngữ cảnh yêu cầu; bỏ qua lỗi ghi cơ sở dữ liệu.
 async fn insert_security_event(
     state: &AppState,
     event_type: &str,
@@ -512,6 +549,7 @@ async fn insert_security_event(
     .await;
 }
 
+/// Lưu sự kiện bảo mật trong transaction của bên gọi; lỗi ghi được trả dưới dạng `Internal`.
 async fn insert_security_event_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     event_type: &str,
@@ -542,6 +580,13 @@ async fn insert_security_event_tx(
     Ok(())
 }
 
+/// Đổi refresh token chưa dùng và còn hạn lấy cặp token mới; hạn refresh không vượt hạn phiên.
+/// Cập nhật lần hoạt động của phiên và ghi sự kiện. Token đã dùng hoặc bị thu hồi khiến
+/// phiên cùng toàn bộ refresh token của phiên bị thu hồi trước khi trả `Unauthorized`.
+/// Token không tồn tại, hết hạn hoặc phiên không dùng được cũng trả `Unauthorized`.
+/// Trả `TooManyRequests` khi vượt hạn mức IP, `Unavailable` khi Redis lỗi,
+/// hoặc `Internal` khi xử lý lỗi.
+/// Kết quả có `expires_in` tính bằng giây; rotation được commit trước khi ký access token.
 pub async fn refresh(
     state: &AppState,
     ip: &str,
@@ -655,6 +700,10 @@ pub async fn refresh(
     })
 }
 
+/// Với tài khoản active, thay token đặt lại mật khẩu, xếp hàng email có hạn một giờ
+/// và ghi sự kiện yêu cầu. Trả cùng thông điệp trung tính nếu email không tồn tại
+/// hoặc tài khoản không active. Trả `TooManyRequests` khi vượt hạn mức IP/email,
+/// `Unavailable` khi Redis lỗi, `Internal` khi truy vấn hoặc transaction thất bại.
 pub async fn forgot_password(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
     let email = normalize_email(email_raw);
 
@@ -713,6 +762,11 @@ pub async fn forgot_password(state: &AppState, ip: &str, email_raw: &str) -> App
     Ok(NEUTRAL_FORGOT_MSG.to_string())
 }
 
+/// Dùng token đặt lại một lần để đổi mật khẩu, giữ năm hash gần nhất và thu hồi
+/// mọi phiên cùng refresh token trong transaction, rồi trả thông báo thành công.
+/// Trả `BadRequest` nếu token không dùng được, mật khẩu ngoài 8–128 byte hoặc trùng
+/// một trong năm hash gần nhất. Trả `TooManyRequests` khi vượt hạn mức IP,
+/// `Unavailable` khi Redis lỗi, `Internal` khi băm, chạy tác vụ hoặc truy vấn thất bại.
 pub async fn reset_password(
     state: &AppState,
     ip: &str,
@@ -791,6 +845,13 @@ pub async fn reset_password(
     Ok("Password has been reset.".to_string())
 }
 
+/// Đổi mật khẩu cho người dùng active có phiên còn hiệu lực và mật khẩu hiện tại đúng.
+/// Giữ năm hash gần nhất, thu hồi các phiên khác cùng refresh token của chúng,
+/// giữ phiên hiện tại và trả thông báo thành công.
+/// Trả `BadRequest` nếu mật khẩu mới ngoài 8–128 byte, trùng mật khẩu hiện tại hoặc lịch sử;
+/// `Unauthorized` nếu xác thực không đạt hoặc credential đã thay đổi trước khi ghi.
+/// Truyền tiếp `TooManyRequests` khi quá hạn mức, `Unavailable` khi Redis lỗi,
+/// `Internal` khi bộ xác thực, băm mật khẩu, tác vụ hoặc cơ sở dữ liệu thất bại.
 pub async fn change_password(
     state: &AppState,
     access_token: &str,
@@ -927,6 +988,10 @@ pub async fn change_password(
     Ok("Password has been changed.".to_string())
 }
 
+/// Đặt tài khoản active thành deleted với hạn purge sau 30 ngày, thu hồi toàn bộ phiên
+/// và refresh token, ghi sự kiện rồi trả thông báo đã lên lịch xóa.
+/// Trả `Unauthorized` nếu JWT, người dùng hoặc phiên không hợp lệ; truyền tiếp `Conflict`
+/// nếu cập nhật trạng thái không thành công và `Internal` nếu xác thực hoặc cơ sở dữ liệu lỗi.
 pub async fn request_delete(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
@@ -973,6 +1038,11 @@ pub async fn request_delete(state: &AppState, access_token: &str, ip: &str) -> A
     Ok("Account scheduled for deletion.".to_string())
 }
 
+/// Với tài khoản deleted, thay token khôi phục và xếp hàng email mới có hạn 48 giờ.
+/// Trả cùng thông điệp trung tính cho email không tồn tại hoặc tài khoản chưa xóa;
+/// cửa sổ khôi phục chỉ được kiểm tra khi xác nhận token.
+/// Trả `TooManyRequests` khi vượt hạn mức IP, `Unavailable` khi Redis lỗi,
+/// `Internal` khi truy vấn hoặc transaction thất bại.
 pub async fn request_restore(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
     let email = normalize_email(email_raw);
     state
@@ -1008,6 +1078,10 @@ pub async fn request_restore(state: &AppState, ip: &str, email_raw: &str) -> App
     Ok(NEUTRAL_RESTORE_MSG.to_string())
 }
 
+/// Dùng token khôi phục một lần để phục hồi trạng thái trước khi xóa và ghi sự kiện.
+/// Không mở lại các phiên đã thu hồi. Trả thông báo thành công hoặc `BadRequest`
+/// nếu token không dùng được hay tài khoản không còn đủ điều kiện khôi phục.
+/// Lỗi truy vấn hoặc transaction được truyền ra dưới dạng `Internal`.
 pub async fn confirm_restore(state: &AppState, ip: &str, token: &str) -> AppResult<String> {
     let token_id = state
         .magic_link_signer

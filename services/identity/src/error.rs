@@ -34,10 +34,12 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// Tạo lỗi cấu hình với chi tiết dùng nội bộ; phản hồi HTTP sẽ che chi tiết này.
     pub fn config(msg: impl Into<String>) -> Self {
         Self::Config(msg.into())
     }
 
+    /// Ánh xạ lỗi sang trạng thái HTTP, trong đó lỗi cấu hình và lỗi nội bộ đều là 500.
     pub fn status_code(&self) -> StatusCode {
         match self {
             Self::Config(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -51,6 +53,7 @@ impl AppError {
         }
     }
 
+    /// Trả mã lỗi dạng snake_case dùng trong trường `code` của phản hồi API.
     pub fn code(&self) -> &'static str {
         match self {
             Self::Config(_) => "config_error",
@@ -64,6 +67,8 @@ impl AppError {
         }
     }
 
+    /// Trả thông điệp cho client, che chi tiết cấu hình và lỗi nội bộ.
+    /// Thông điệp `BadRequest` được giữ nguyên.
     pub fn public_message(&self) -> String {
         match self {
             Self::Config(_) => "internal server error".to_string(),
@@ -85,6 +90,7 @@ struct ErrorBody {
 }
 
 impl IntoResponse for AppError {
+    /// Tạo phản hồi JSON chứa `code` và thông điệp công khai với trạng thái HTTP tương ứng.
     fn into_response(self) -> Response {
         let status = self.status_code();
         let body = ErrorBody {

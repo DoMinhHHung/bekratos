@@ -27,6 +27,7 @@ pub struct EmailWorker {
 }
 
 impl EmailWorker {
+    /// Tạo tác vụ gửi email với bộ gửi, bộ ký và cấu hình được cấp; chưa nhận việc hay gửi thư.
     pub fn new(
         pool: PgPool,
         mailer: Arc<dyn Mailer>,
@@ -41,6 +42,8 @@ impl EmailWorker {
         }
     }
 
+    /// Xử lý email sau mỗi khoảng chờ cấu hình, dừng khi nhận thay đổi `shutdown` thành `true`.
+    /// Lỗi của một lượt xử lý được giữ trong tác vụ; vòng lặp tiếp tục chạy.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {
@@ -59,6 +62,9 @@ impl EmailWorker {
         }
     }
 
+    /// Nhận một lô token đến hạn và gửi email chứa liên kết theo mục đích của token.
+    /// Chỉ lỗi nhận lô được trả về. Lỗi ký hoặc gửi được chuyển thành lịch thử lại;
+    /// lỗi ghi nhận gửi thành công hoặc thất bại bị bỏ qua.
     async fn tick(&self) -> AppResult<()> {
         let repo = TokenRepo::new(&self.pool);
         let due = repo
@@ -126,16 +132,20 @@ impl EmailWorker {
     }
 }
 
+/// Trả số giây chờ thử lại theo cấp số nhân, từ 30 đến 3.600 giây.
+/// Số lần thử được chặn trong khoảng 1–8 trước khi tính.
 fn backoff_secs(attempts: i32) -> i64 {
     let exp = attempts.clamp(1, 8) as u32;
     let secs = 30u64.saturating_mul(2u64.saturating_pow(exp.saturating_sub(1)));
     secs.min(3600) as i64
 }
 
+/// Trả thời điểm UTC hiện tại cộng `hours` giờ; giá trị âm cho thời điểm trong quá khứ.
 pub fn default_expiry(hours: i64) -> chrono::DateTime<Utc> {
     Utc::now() + ChronoDuration::hours(hours)
 }
 
+/// Sinh UUIDv7 cho bản ghi token dựa trên thời điểm hiện tại.
 pub fn new_token_id() -> Uuid {
     Uuid::now_v7()
 }

@@ -18,16 +18,22 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Tạo bộ giới hạn yêu cầu dùng bộ quản lý kết nối Redis được cấp.
     pub fn new(conn: ConnectionManager) -> Self {
         Self { conn }
     }
 
+    /// Băm định danh thành hex SHA-256 để dùng trong khóa bộ đếm Redis.
     fn hash_id(raw: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(raw.as_bytes());
         hex::encode(hasher.finalize())
     }
 
+    /// Tăng bộ đếm theo endpoint, chiều giới hạn và định danh đã băm.
+    /// Cửa sổ dài `window_secs` giây được tính từ lần tăng đầu tiên; các lần bị từ chối
+    /// vẫn tăng bộ đếm. Trả `TooManyRequests` khi số đếm vượt `limit`,
+    /// hoặc `Unavailable` nếu thao tác Redis thất bại.
     pub async fn check_and_incr(
         &self,
         endpoint: &str,

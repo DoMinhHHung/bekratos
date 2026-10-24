@@ -33,6 +33,7 @@ pub struct JwtSigner {
 }
 
 impl std::fmt::Debug for JwtSigner {
+    /// Định dạng thông tin bộ ký để chẩn đoán mà không đưa khóa riêng vào kết quả.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JwtSigner")
             .field("kid", &self.kid)
@@ -44,6 +45,9 @@ impl std::fmt::Debug for JwtSigner {
 }
 
 impl JwtSigner {
+    /// Tạo bộ ký ES256 từ khóa riêng P-256 dạng PKCS#8 PEM; TTL access token tính bằng giây.
+    /// Trả `Config` nếu TTL không dương, `kid`/issuer/audience chỉ có khoảng trắng
+    /// hoặc không thể đọc và chuyển khóa sang định dạng ký ES256.
     pub fn from_pem(
         private_pem: &str,
         kid: String,
@@ -80,6 +84,9 @@ impl JwtSigner {
         })
     }
 
+    /// Phát hành JWT ES256 có `sub` là người dùng, `sid` là phiên và `kid` trong header.
+    /// Token có hiệu lực từ thời điểm phát hành, hết hạn theo TTL đã cấu hình.
+    /// Trả `Internal` nếu ký thất bại; không kiểm tra trạng thái người dùng hoặc phiên.
     pub fn issue_access_token(&self, user_id: Uuid, session_id: Uuid) -> AppResult<String> {
         let now = Utc::now();
         let issued_at = now.timestamp();
@@ -103,18 +110,22 @@ impl JwtSigner {
         })
     }
 
+    /// Trả thời hạn access token tính bằng giây, dùng cho trường `expires_in`.
     pub fn access_ttl_secs(&self) -> i64 {
         self.access_ttl_secs
     }
 
+    /// Trả ID khóa được ghi trong header của JWT do bộ ký phát hành.
     pub fn kid(&self) -> &str {
         &self.kid
     }
 
+    /// Trả giá trị claim `iss` dùng khi phát hành JWT.
     pub fn issuer(&self) -> &str {
         &self.issuer
     }
 
+    /// Trả giá trị claim `aud` dùng khi phát hành JWT.
     pub fn audience(&self) -> &str {
         &self.audience
     }
@@ -128,6 +139,7 @@ pub struct JwtVerifier {
 }
 
 impl std::fmt::Debug for JwtVerifier {
+    /// Định dạng issuer và audience để chẩn đoán mà không xuất danh sách khóa xác thực.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JwtVerifier")
             .field("issuer", &self.issuer)
@@ -137,6 +149,7 @@ impl std::fmt::Debug for JwtVerifier {
 }
 
 impl JwtVerifier {
+    /// Tạo bộ xác thực với issuer và audience mong đợi; ban đầu chưa có khóa xác thực.
     pub fn new(issuer: String, audience: String) -> Self {
         Self {
             keys: Arc::new(RwLock::new(HashMap::new())),
@@ -145,6 +158,8 @@ impl JwtVerifier {
         }
     }
 
+    /// Nạp khóa EC công khai dạng PEM cho `kid`, thay khóa cùng ID nếu đã có.
+    /// Trả `Internal` nếu PEM không đọc được hoặc khóa đồng bộ dùng chung bị poisoned.
     pub async fn insert_key(&self, kid: String, public_pem: &str) -> AppResult<()> {
         let decoding_key = DecodingKey::from_ec_pem(public_pem.as_bytes()).map_err(|error| {
             tracing::error!(error = %error, %kid, "invalid JWT verification PEM");
@@ -153,6 +168,8 @@ impl JwtVerifier {
         self.insert_decoding_key(kid, decoding_key).await
     }
 
+    /// Thêm hoặc thay khóa giải mã cho `kid` trong tập khóa dùng chung giữa các bản sao.
+    /// Trả `Internal` nếu khóa đồng bộ bị poisoned.
     pub async fn insert_decoding_key(&self, kid: String, key: DecodingKey) -> AppResult<()> {
         let mut keys = self.keys.write().map_err(|error| {
             tracing::error!(error = %error, "JWT verification key lock poisoned");
@@ -162,6 +179,8 @@ impl JwtVerifier {
         Ok(())
     }
 
+    /// Gỡ khóa theo `kid` khỏi tập khóa dùng chung; ID không tồn tại vẫn thành công.
+    /// Trả `Internal` nếu khóa đồng bộ bị poisoned.
     pub async fn remove_key(&self, kid: &str) -> AppResult<()> {
         let mut keys = self.keys.write().map_err(|error| {
             tracing::error!(error = %error, "JWT verification key lock poisoned");
@@ -171,6 +190,7 @@ impl JwtVerifier {
         Ok(())
     }
 
+    /// Xóa toàn bộ khóa xác thực dùng chung; trả `Internal` nếu khóa đồng bộ bị poisoned.
     pub async fn clear(&self) -> AppResult<()> {
         let mut keys = self.keys.write().map_err(|error| {
             tracing::error!(error = %error, "JWT verification key lock poisoned");
@@ -180,6 +200,9 @@ impl JwtVerifier {
         Ok(())
     }
 
+    /// Xác thực chữ ký ES256, `kid`, issuer, audience và thời gian `exp`/`nbf` theo
+    /// quy tắc mặc định của `jsonwebtoken`, rồi trả các claim; không tra trạng thái phiên.
+    /// Token không hợp lệ trả `Unauthorized`; khóa đồng bộ bị poisoned trả `Internal`.
     pub fn verify_access_token(&self, token: &str) -> AppResult<AccessClaims> {
         let header = decode_header(token).map_err(|_| AppError::Unauthorized)?;
         if header.alg != Algorithm::ES256 {
@@ -205,11 +228,14 @@ impl JwtVerifier {
         Ok(decoded.claims)
     }
 
+    /// Cung cấp giao diện async cho `verify_access_token`, giữ nguyên claim và lỗi trả về.
     pub async fn verify_access_token_async(&self, token: &str) -> AppResult<AccessClaims> {
         self.verify_access_token(token)
     }
 }
 
+/// Suy ra PEM công khai từ khóa riêng P-256 dạng PKCS#8 PEM.
+/// Trả `Config` nếu khóa đầu vào không hợp lệ, `Internal` nếu không mã hóa được khóa công khai.
 pub fn public_pem_from_private_pem(private_pem: &str) -> AppResult<String> {
     let secret = SecretKey::from_pkcs8_pem(private_pem).map_err(|error| {
         tracing::error!(error = %error, "invalid JWT signing PEM while deriving public key");

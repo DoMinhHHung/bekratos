@@ -7,10 +7,12 @@ use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Tạo route GET `/v1/jwks` để công bố khóa công khai, không yêu cầu Bearer token.
 pub fn router() -> Router<AppState> {
     Router::new().route("/v1/jwks", get(jwks))
 }
 
+/// Trả tập khóa công khai dưới dạng JSON; truyền lỗi cơ sở dữ liệu `Internal` từ service.
 #[utoipa::path(
     get,
     path = "/v1/jwks",

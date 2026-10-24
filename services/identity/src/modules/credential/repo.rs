@@ -6,6 +6,7 @@ use crate::error::{AppError, AppResult};
 pub struct CredentialRepo;
 
 impl CredentialRepo {
+    /// Lưu hash mật khẩu đã được tạo sẵn trong transaction; lỗi cơ sở dữ liệu trả `Internal`.
     pub async fn insert_password_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -28,6 +29,8 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Thêm hash vào lịch sử mật khẩu trong transaction, chưa cắt bớt lịch sử.
+    /// Trả `Internal` nếu ghi cơ sở dữ liệu thất bại.
     pub async fn insert_history_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -52,6 +55,8 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Lấy hash mật khẩu hiện tại, hoặc `None` nếu chưa có credential.
+    /// Trả `Internal` khi truy vấn thất bại.
     pub async fn find_password_hash(pool: &PgPool, user_id: Uuid) -> AppResult<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as(
             r#"
@@ -70,6 +75,8 @@ impl CredentialRepo {
         Ok(row.map(|r| r.0))
     }
 
+    /// Lấy hash hiện tại trong transaction, hoặc `None` nếu chưa có credential.
+    /// Truy vấn không khóa hàng; lỗi cơ sở dữ liệu trả `Internal`.
     pub async fn find_password_hash_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -91,6 +98,8 @@ impl CredentialRepo {
         Ok(row.map(|r| r.0))
     }
 
+    /// Thay hash và cập nhật thời điểm đổi mật khẩu trong transaction.
+    /// Trả `Internal` nếu truy vấn thất bại hoặc không cập nhật đúng một credential.
     pub async fn update_password_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -119,6 +128,8 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Lấy tối đa `limit` hash từ lịch sử, theo thời điểm tạo mới nhất trước.
+    /// Giới hạn âm bị PostgreSQL từ chối; lỗi truy vấn trả `Internal`.
     pub async fn list_recent_hashes(
         pool: &PgPool,
         user_id: Uuid,
@@ -144,6 +155,8 @@ impl CredentialRepo {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
+    /// Lấy tối đa `limit` hash mới nhất từ lịch sử trong transaction.
+    /// Giới hạn âm bị PostgreSQL từ chối; lỗi truy vấn trả `Internal`.
     pub async fn list_recent_hashes_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -169,6 +182,8 @@ impl CredentialRepo {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
+    /// Xóa lịch sử cũ, giữ tối đa `keep` hash mới nhất trong transaction; 0 xóa toàn bộ.
+    /// Giới hạn âm hoặc lỗi truy vấn trả `Internal`.
     pub async fn trim_history_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,

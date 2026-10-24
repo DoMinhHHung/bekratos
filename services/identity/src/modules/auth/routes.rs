@@ -17,6 +17,7 @@ use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Tạo các route xác thực và khôi phục tài khoản dùng chung `AppState`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/auth/register", post(register))
@@ -32,11 +33,16 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/restore", post(confirm_restore))
 }
 
+/// Lấy IP của kết nối trực tiếp cho giới hạn yêu cầu; thiếu thông tin trả `unknown`.
+/// Không sử dụng các header IP do client gửi.
 fn client_ip(addr: Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
     addr.map(|Extension(ConnectInfo(peer))| peer.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Lấy token không rỗng từ tiền tố `Bearer ` hoặc `bearer ` của header Authorization.
+/// Trả `Unauthorized` khi header thiếu, không đọc được hoặc không đúng tiền tố;
+/// chưa xác thực nội dung token.
 fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -52,6 +58,8 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     Ok(token)
 }
 
+/// Kiểm tra request rồi đăng ký tài khoản và trả thông điệp trung tính dưới dạng JSON.
+/// Request sai trả `BadRequest`; lỗi xử lý được truyền tiếp từ `service::register`.
 #[utoipa::path(
     post,
     path = "/v1/auth/register",
@@ -75,6 +83,8 @@ pub(crate) async fn register(
     Ok(Json(RegisterResponse { message }))
 }
 
+/// Kiểm tra request rồi dùng token xác minh email, trả thông báo JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::verify_email`.
 #[utoipa::path(
     post,
     path = "/v1/auth/verify-email",
@@ -98,6 +108,8 @@ pub(crate) async fn verify_email(
     Ok(Json(VerifyEmailResponse { message }))
 }
 
+/// Kiểm tra request gửi lại email xác minh và trả thông điệp trung tính dạng JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::resend_verification`.
 #[utoipa::path(
     post,
     path = "/v1/auth/resend-verification",
@@ -121,6 +133,8 @@ pub(crate) async fn resend_verification(
     Ok(Json(ResendVerificationResponse { message }))
 }
 
+/// Kiểm tra request, chuyển IP kết nối và user-agent cho đăng nhập, rồi trả cặp token JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::login`.
 #[utoipa::path(
     post,
     path = "/v1/auth/login",
@@ -149,6 +163,8 @@ pub(crate) async fn login(
     Ok(Json(resp))
 }
 
+/// Lấy Bearer token để thu hồi phiên và trả thông báo JSON.
+/// Header không hợp lệ trả `Unauthorized`; truyền tiếp lỗi từ `service::logout`.
 #[utoipa::path(
     post,
     path = "/v1/auth/logout",
@@ -170,6 +186,8 @@ pub(crate) async fn logout(
     Ok(Json(LogoutResponse { message }))
 }
 
+/// Kiểm tra request rồi đổi refresh token và trả cặp token JSON với `expires_in` tính bằng giây.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::refresh`.
 #[utoipa::path(
     post,
     path = "/v1/auth/refresh",
@@ -203,6 +221,8 @@ pub(crate) async fn refresh(
     }))
 }
 
+/// Kiểm tra request đặt lại mật khẩu và trả thông điệp trung tính dạng JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::forgot_password`.
 #[utoipa::path(
     post,
     path = "/v1/auth/forgot-password",
@@ -226,6 +246,8 @@ pub(crate) async fn forgot_password(
     Ok(Json(ForgotPasswordResponse { message }))
 }
 
+/// Kiểm tra request rồi đặt lại mật khẩu bằng token và trả thông báo JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::reset_password`.
 #[utoipa::path(
     post,
     path = "/v1/auth/reset-password",
@@ -249,6 +271,9 @@ pub(crate) async fn reset_password(
     Ok(Json(ResetPasswordResponse { message }))
 }
 
+/// Kiểm tra request và lấy Bearer token để đổi mật khẩu, trả thông báo JSON.
+/// Request sai trả `BadRequest`, header sai trả `Unauthorized`;
+/// truyền tiếp lỗi từ `service::change_password`.
 #[utoipa::path(
     post,
     path = "/v1/auth/change-password",
@@ -283,6 +308,8 @@ pub(crate) async fn change_password(
     Ok(Json(ChangePasswordResponse { message }))
 }
 
+/// Kiểm tra request khôi phục tài khoản và trả thông điệp trung tính dạng JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::request_restore`.
 #[utoipa::path(
     post,
     path = "/v1/auth/request-restore",
@@ -306,6 +333,8 @@ pub(crate) async fn request_restore(
     Ok(Json(RestoreResponse { message }))
 }
 
+/// Kiểm tra request rồi xác nhận khôi phục tài khoản bằng token, trả thông báo JSON.
+/// Request sai trả `BadRequest`; truyền tiếp lỗi từ `service::confirm_restore`.
 #[utoipa::path(
     post,
     path = "/v1/auth/restore",

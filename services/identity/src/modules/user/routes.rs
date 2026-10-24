@@ -12,6 +12,9 @@ use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
 
+/// Lấy token không rỗng từ tiền tố `Bearer ` hoặc `bearer ` của header Authorization.
+/// Trả `Unauthorized` khi header thiếu, không đọc được hoặc không đúng tiền tố;
+/// chưa xác thực nội dung token.
 fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -24,6 +27,7 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
         .ok_or(AppError::Unauthorized)
 }
 
+/// Tạo các route hồ sơ, phiên và xóa tài khoản dùng chung `AppState`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/me", get(get_profile).patch(update_profile))
@@ -32,11 +36,15 @@ pub fn router() -> Router<AppState> {
         .route("/v1/me/delete", delete(delete_account))
 }
 
+/// Lấy IP của kết nối trực tiếp cho giới hạn yêu cầu; thiếu thông tin trả `unknown`.
+/// Không sử dụng các header IP do client gửi.
 fn client_ip(addr: Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
     addr.map(|Extension(ConnectInfo(peer))| peer.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Trả hồ sơ JSON của người dùng được xác thực bằng Bearer token.
+/// Header sai trả `Unauthorized`; truyền tiếp lỗi từ `service::get_profile`.
 #[utoipa::path(
     get,
     path = "/v1/me",
@@ -56,6 +64,9 @@ pub(crate) async fn get_profile(
     Ok(Json(profile))
 }
 
+/// Kiểm tra request cập nhật hồ sơ rồi trả hồ sơ JSON sau khi lưu.
+/// Request sai trả `BadRequest`, header sai trả `Unauthorized`;
+/// truyền tiếp lỗi từ `service::update_profile`.
 #[utoipa::path(
     patch,
     path = "/v1/me",
@@ -80,6 +91,8 @@ pub(crate) async fn update_profile(
     Ok(Json(profile))
 }
 
+/// Trả danh sách phiên JSON, có đánh dấu phiên hiện tại của Bearer token.
+/// Header sai trả `Unauthorized`; truyền tiếp lỗi từ `service::list_sessions`.
 #[utoipa::path(
     get,
     path = "/v1/me/sessions",
@@ -99,6 +112,9 @@ pub(crate) async fn list_sessions(
     Ok(Json(list))
 }
 
+/// Thu hồi phiên được chỉ định trong đường dẫn và trả thông báo JSON.
+/// Header sai trả `Unauthorized`; truyền tiếp lỗi từ `service::revoke_session`,
+/// kể cả `BadRequest` khi chọn phiên hiện tại và `NotFound` khi phiên không thuộc người dùng.
 #[utoipa::path(
     delete,
     path = "/v1/me/sessions/{id}",
@@ -121,6 +137,8 @@ pub(crate) async fn revoke_one(
     Ok(Json(MessageResponse { message }))
 }
 
+/// Thu hồi các phiên khác và trả thông báo JSON.
+/// Header sai trả `Unauthorized`; truyền tiếp lỗi từ `service::revoke_other_sessions`.
 #[utoipa::path(
     delete,
     path = "/v1/me/sessions",
@@ -140,6 +158,8 @@ pub(crate) async fn revoke_others(
     Ok(Json(MessageResponse { message }))
 }
 
+/// Yêu cầu xóa tài khoản bằng Bearer token và trả thông báo đã lên lịch dạng JSON.
+/// Header sai trả `Unauthorized`; truyền tiếp lỗi từ service yêu cầu xóa tài khoản.
 #[utoipa::path(
     delete,
     path = "/v1/me/delete",

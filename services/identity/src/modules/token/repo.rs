@@ -26,10 +26,14 @@ pub struct TokenRepo<'a> {
 }
 
 impl<'a> TokenRepo<'a> {
+    /// Gắn repository token và hàng đợi email với pool PostgreSQL; chưa thực hiện truy vấn.
     pub fn new(pool: &'a PgPool) -> Self {
         Self { pool }
     }
 
+    /// Tạo và trả token có hạn dùng UTC, đồng thời đưa email vào hàng đợi thử gửi ngay.
+    /// `purpose` nhận `email_verify`, `password_reset` hoặc `account_restore`.
+    /// Vi phạm ràng buộc hoặc lỗi cơ sở dữ liệu trả `Internal`.
     pub async fn insert(
         &self,
         id: Uuid,
@@ -63,6 +67,9 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Tạo và trả token cùng lịch gửi email ngay trong transaction.
+    /// `purpose` nhận `email_verify`, `password_reset` hoặc `account_restore`;
+    /// `expires_at` là thời điểm UTC. Lỗi cơ sở dữ liệu trả `Internal`.
     pub async fn insert_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -96,6 +103,8 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Thu hồi token chưa dùng, chưa thu hồi của người dùng theo mục đích trong transaction.
+    /// Bao gồm token đã hết hạn; trả số hàng đổi, hoặc `Internal` nếu truy vấn thất bại.
     pub async fn revoke_active_for_user_purpose_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -122,6 +131,9 @@ impl<'a> TokenRepo<'a> {
         Ok(result.rows_affected())
     }
 
+    /// Đánh dấu đã dùng và trả token đúng ID, mục đích, chưa dùng, chưa thu hồi và còn hạn.
+    /// Thao tác nguyên tử trong transaction; bên gọi quyết định commit hoặc rollback.
+    /// Trả `None` nếu không đủ điều kiện, `Internal` nếu truy vấn thất bại.
     pub async fn consume_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -153,6 +165,10 @@ impl<'a> TokenRepo<'a> {
         Ok(row)
     }
 
+    /// Nhận tối đa `limit` token chưa gửi, chưa dùng, chưa thu hồi, còn hạn và đến lịch thử gửi.
+    /// Ưu tiên bản ghi cũ, bỏ qua hàng đang bị khóa; đặt quyền xử lý trong `lease_secs` giây
+    /// và tăng số lần thử. Quyền xử lý phải hết hạn trước thời điểm hiện tại mới được nhận lại.
+    /// Trả các bản ghi đã cập nhật hoặc `Internal` nếu truy vấn thất bại.
     pub async fn claim_due_for_delivery(
         &self,
         limit: i64,
@@ -195,6 +211,8 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Ghi thời điểm đã gửi, xóa quyền xử lý, lỗi gửi và lịch thử lại của token.
+    /// ID không tồn tại vẫn thành công; lỗi truy vấn trả `Internal`.
     pub async fn mark_sent(&self, id: Uuid) -> AppResult<()> {
         sqlx::query(
             r#"
@@ -216,6 +234,9 @@ impl<'a> TokenRepo<'a> {
         Ok(())
     }
 
+    /// Lưu mã lỗi gửi, bỏ quyền xử lý và hẹn thử lại sau `backoff_secs` giây.
+    /// Không tăng số lần thử tại đây; ID không tồn tại vẫn thành công.
+    /// Lỗi truy vấn trả `Internal`.
     pub async fn mark_delivery_failure(
         &self,
         id: Uuid,

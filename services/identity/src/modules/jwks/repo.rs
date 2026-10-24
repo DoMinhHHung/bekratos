@@ -34,6 +34,8 @@ pub struct NewSigningKey {
 pub struct JwksRepo;
 
 impl JwksRepo {
+    /// Lưu khóa ký ES256 cùng khóa riêng đã mã hóa trong transaction.
+    /// Lỗi cơ sở dữ liệu, kể cả trùng `kid`, trả `Internal`.
     pub async fn insert_tx(
         tx: &mut Transaction<'_, Postgres>,
         key: NewSigningKey,
@@ -62,6 +64,8 @@ impl JwksRepo {
         Ok(())
     }
 
+    /// Lấy khóa có trạng thái `active`, hoặc `None` nếu chưa có; không kiểm tra hạn công bố.
+    /// Lỗi truy vấn trả `Internal`.
     pub async fn find_active(pool: &PgPool) -> AppResult<Option<SigningKeyRow>> {
         sqlx::query_as::<_, SigningKeyRow>(
             r#"
@@ -81,6 +85,8 @@ impl JwksRepo {
         })
     }
 
+    /// Lấy khóa theo `kid` ở mọi trạng thái, hoặc `None` nếu không có.
+    /// Lỗi truy vấn trả `Internal`.
     pub async fn find_by_kid(pool: &PgPool, kid: &str) -> AppResult<Option<SigningKeyRow>> {
         sqlx::query_as::<_, SigningKeyRow>(
             r#"
@@ -100,6 +106,8 @@ impl JwksRepo {
         })
     }
 
+    /// Lấy khóa `active` hoặc `retiring` chưa hết hạn công bố, hoặc không đặt hạn công bố,
+    /// theo phiên bản giảm dần. Không lọc theo `publish_at`; lỗi truy vấn trả `Internal`.
     pub async fn list_publishable(pool: &PgPool) -> AppResult<Vec<SigningKeyRow>> {
         sqlx::query_as::<_, SigningKeyRow>(
             r#"
@@ -120,6 +128,10 @@ impl JwksRepo {
         })
     }
 
+    /// Chuyển khóa active sang retiring với thời gian công bố thêm một giờ, rồi kích hoạt
+    /// khóa được chỉ định nếu đang pending hoặc retiring trong cùng transaction.
+    /// Trả `Conflict` nếu không kích hoạt đúng một khóa, `Internal` nếu truy vấn thất bại;
+    /// bên gọi cần rollback khi lỗi để hủy các cập nhật đã thực hiện.
     pub async fn activate_tx(tx: &mut Transaction<'_, Postgres>, id: Uuid) -> AppResult<()> {
         sqlx::query(
             r#"
@@ -160,6 +172,8 @@ impl JwksRepo {
         Ok(())
     }
 
+    /// Chuyển khóa retiring có `publish_until` không lớn hơn hiện tại sang retired.
+    /// Trả số hàng đổi hoặc `Internal` nếu truy vấn thất bại.
     pub async fn mark_retired_expired(pool: &PgPool) -> AppResult<u64> {
         let res = sqlx::query(
             r#"
@@ -179,6 +193,8 @@ impl JwksRepo {
         Ok(res.rows_affected())
     }
 
+    /// Trả phiên bản lớn nhất hiện có cộng một, bắt đầu từ 1 nếu chưa có khóa.
+    /// Không giữ chỗ phiên bản cho lần ghi sau; lỗi truy vấn trả `Internal`.
     pub async fn next_version(pool: &PgPool) -> AppResult<i32> {
         let row: (Option<i32>,) = sqlx::query_as(
             r#"

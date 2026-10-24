@@ -16,6 +16,8 @@ use crate::modules::jwks;
 use crate::modules::user;
 use crate::state::AppState;
 
+/// Tạo router cho API, kiểm tra sức khỏe và Swagger UI với trạng thái dùng chung.
+/// Áp dụng giới hạn kích thước thân yêu cầu và thời gian xử lý từ cấu hình.
 pub fn build_router(state: AppState) -> Router {
     let body_limit = state.config.body_limit_bytes;
     let timeout = state.config.request_timeout;
@@ -41,6 +43,7 @@ pub(crate) struct HealthResponse {
     status: String,
 }
 
+/// Trả HTTP 200 với trạng thái `ok`, không kiểm tra các dịch vụ phụ thuộc.
 #[utoipa::path(
     get,
     path = "/healthz",
@@ -61,6 +64,8 @@ pub(crate) struct ReadyResponse {
     status: String,
 }
 
+/// Trả trạng thái `ready` nếu các phụ thuộc được bật trong cấu hình đều phản hồi.
+/// Lỗi kiểm tra PostgreSQL hoặc Redis được trả về dưới dạng `Unavailable`.
 #[utoipa::path(
     get,
     path = "/readyz",

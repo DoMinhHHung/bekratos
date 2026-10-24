@@ -12,6 +12,9 @@ pub struct PasswordPolicy {
 }
 
 impl PasswordPolicy {
+    /// Tạo chính sách Argon2id với bộ nhớ tính bằng KiB, số vòng lặp và mức song song.
+    /// Trả `Config` nếu bộ nhớ dưới 19.456 KiB, số vòng dưới 2, mức song song dưới 1
+    /// hoặc tổ hợp tham số không hợp lệ với Argon2.
     pub fn new(memory_kib: u32, iterations: u32, parallelism: u32) -> AppResult<Self> {
         if memory_kib < 19_456 {
             return Err(AppError::config("ARGON2_MEMORY_KIB must be >= 19456"));
@@ -31,12 +34,16 @@ impl PasswordPolicy {
         })
     }
 
+    /// Tạo bộ băm Argon2id phiên bản 0x13 theo chính sách; lỗi tham số thành `Internal`.
     fn hasher(&self) -> AppResult<Argon2<'static>> {
         let params = Params::new(self.memory_kib, self.iterations, self.parallelism, None)
             .map_err(|_| AppError::Internal)?;
         Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
     }
 
+    /// Băm mật khẩu bằng Argon2id với salt ngẫu nhiên, trả chuỗi PHC để lưu trữ.
+    /// Chỉ nhận mật khẩu dài 8–128 byte; ngoài khoảng này trả `BadRequest`.
+    /// Lỗi tạo bộ băm hoặc băm mật khẩu được trả dưới dạng `Internal`.
     pub fn hash(&self, password: &str) -> AppResult<String> {
         if !(8..=128).contains(&password.len()) {
             return Err(AppError::BadRequest(
@@ -52,6 +59,8 @@ impl PasswordPolicy {
         Ok(hash)
     }
 
+    /// Kiểm tra mật khẩu theo chuỗi PHC đã lưu.
+    /// Mật khẩu sai, PHC không hợp lệ và mọi lỗi xử lý đều trở thành `Ok(false)`.
     pub fn verify(&self, password: &str, password_hash: &str) -> AppResult<bool> {
         let parsed = match PasswordHash::new(password_hash) {
             Ok(p) => p,
@@ -68,6 +77,8 @@ impl PasswordPolicy {
         }
     }
 
+    /// Cho biết hash cần băm lại nếu PHC không đọc được, thuật toán khác Argon2id
+    /// hoặc một trong các tham số bộ nhớ, vòng lặp, mức song song khác chính sách.
     pub fn needs_rehash(&self, password_hash: &str) -> bool {
         let Ok(parsed) = PasswordHash::new(password_hash) else {
             return true;
@@ -95,6 +106,8 @@ impl PasswordPolicy {
 }
 
 impl PasswordPolicy {
+    /// Thực hiện kiểm tra Argon2 giả để bổ sung chi phí xử lý cho lần đăng nhập bị từ chối.
+    /// Bỏ qua kết quả và lỗi; không xác nhận một mật khẩu thực tế.
     pub fn dummy_verify(&self) {
         let hash = format!(
             "$argon2id$v=19$m={},t={},p=1$c29tZXNhbHRzb21lc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
