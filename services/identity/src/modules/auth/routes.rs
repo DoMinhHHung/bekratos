@@ -10,7 +10,8 @@ use super::dto::{
     ChangePasswordRequest, ChangePasswordResponse, ForgotPasswordRequest, ForgotPasswordResponse,
     LoginRequest, LoginResponse, LogoutResponse, RefreshRequest, RefreshResponse, RegisterRequest,
     RegisterResponse, ResendVerificationRequest, ResendVerificationResponse, ResetPasswordRequest,
-    ResetPasswordResponse, VerifyEmailRequest, VerifyEmailResponse,
+    ResetPasswordResponse, RestoreConfirmRequest, RestoreRequestBody, RestoreResponse,
+    VerifyEmailRequest, VerifyEmailResponse,
 };
 use super::service;
 use crate::error::AppError;
@@ -27,6 +28,8 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/forgot-password", post(forgot_password))
         .route("/v1/auth/reset-password", post(reset_password))
         .route("/v1/auth/change-password", post(change_password))
+        .route("/v1/auth/request-restore", post(request_restore))
+        .route("/v1/auth/restore", post(confirm_restore))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -176,4 +179,28 @@ async fn change_password(
     )
     .await?;
     Ok(Json(ChangePasswordResponse { message }))
+}
+
+async fn request_restore(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<RestoreRequestBody>,
+) -> Result<Json<RestoreResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::request_restore(&state, &ip, &body.email).await?;
+    Ok(Json(RestoreResponse { message }))
+}
+
+async fn confirm_restore(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<RestoreConfirmRequest>,
+) -> Result<Json<RestoreResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::confirm_restore(&state, &ip, &body.token).await?;
+    Ok(Json(RestoreResponse { message }))
 }

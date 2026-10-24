@@ -117,8 +117,14 @@ async fn main() {
         }
     };
 
+    let purge = identity::jobs::purge_accounts::PurgeWorker::new(pool.clone());
+    let shutdown_rx2 = shutdown_tx.subscribe();
+
     tokio::spawn(async move {
         worker.run(shutdown_rx).await;
+    });
+    tokio::spawn(async move {
+        purge.run(shutdown_rx2).await;
     });
 
     let addr = config.bind_addr;

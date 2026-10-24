@@ -12,6 +12,7 @@ use crate::error::AppError;
 use crate::infra::db;
 use crate::infra::redis as redis_infra;
 use crate::modules::auth;
+use crate::modules::user;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
@@ -22,6 +23,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .merge(auth::routes::router())
+        .merge(user::routes::router())
         .layer(TraceLayer::new_for_http())
         .layer(TimeoutLayer::new(timeout))
         .layer(RequestBodyLimitLayer::new(body_limit))
