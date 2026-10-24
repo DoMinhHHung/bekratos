@@ -1,0 +1,94 @@
+name: Identity CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/identity/**"
+      - ".github/workflows/ci.yml"
+      - "README.md"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "services/identity/**"
+      - ".github/workflows/ci.yml"
+      - "README.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check required documentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s README.md
+          test -s .github/workflows/ci.yml
+
+  rust:
+    name: Rust quality and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Detect Rust service
+        id: detect
+        shell: bash
+        run: |
+          if [ -s Cargo.toml ]; then echo "has_manifest=true" >> "$GITHUB_OUTPUT"; else echo "has_manifest=false" >> "$GITHUB_OUTPUT"; echo "Rust checks skipped: services/identity/Cargo.toml does not exist yet."; fi
+      - name: Install stable Rust
+        if: steps.detect.outputs.has_manifest == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust artifacts
+        if: steps.detect.outputs.has_manifest == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/identity -> target
+      - name: Verify lockfile
+        if: steps.detect.outputs.has_manifest == 'true'
+        shell: bash
+        working-directory: services/identity
+        run: test -s Cargo.lock
+      - name: Format
+        if: steps.detect.outputs.has_manifest == 'true'
+        working-directory: services/identity
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        if: steps.detect.outputs.has_manifest == 'true'
+        working-directory: services/identity
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Check SQLx offline build
+        if: steps.detect.outputs.has_manifest == 'true'
+        env:
+          SQLX_OFFLINE: "true"
+        working-directory: services/identity
+        run: cargo check --locked --all-targets
+      - name: Test
+        if: steps.detect.outputs.has_manifest == 'true'
+        env:
+          SQLX_OFFLINE: "true"
+        working-directory: services/identity
+        run: cargo test --locked --all-targets
+      - name: Install cargo-audit
+        if: steps.detect.outputs.has_manifest == 'true'
+        uses: taiki-e/install-action@cargo-audit
+      - name: Audit dependencies
+        if: steps.detect.outputs.has_manifest == 'true'
+        working-directory: services/identity
+        run: cargo audit --deny warnings
