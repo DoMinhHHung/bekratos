@@ -11,4 +11,10 @@ ignore = [
     # Track upstream dependents (e.g. validator stack) for a maintained replacement.
     # https://rustsec.org/advisories/RUSTSEC-2026-0173
     "RUSTSEC-2026-0173",
+
+    # RUSTSEC-2026-0387 — timing variability in crypto-bigint ops.
+    # Transitive via p256/jsonwebtoken. No direct dependency.
+    # Track upstream; revisit when p256/jsonwebtoken pull fixed range.
+    # https://rustsec.org/advisories/RUSTSEC-2026-0387
+    "RUSTSEC-2026-0387",
 ]

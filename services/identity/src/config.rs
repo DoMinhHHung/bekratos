@@ -23,6 +23,13 @@ pub struct Config {
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
+    pub jwt_signing_key_pem: String,
+    pub jwt_kid: String,
+    pub jwt_issuer: String,
+    pub jwt_audience: String,
+    pub jwt_access_ttl_secs: i64,
+    pub refresh_ttl_secs: i64,
+    pub session_ttl_secs: i64,
 }
 
 impl Config {
@@ -94,6 +101,28 @@ impl Config {
             .unwrap_or_else(|_| "1".to_string())
             .parse()
             .map_err(|_| AppError::config("ARGON2_PARALLELISM must be u32"))?;
+        let jwt_signing_key_pem = env::var("JWT_SIGNING_KEY_PEM")
+            .map_err(|_| AppError::config("JWT_SIGNING_KEY_PEM is required"))?;
+        let jwt_kid = env::var("JWT_KID").unwrap_or_else(|_| "es256-1".to_string());
+        let jwt_issuer =
+            env::var("JWT_ISSUER").map_err(|_| AppError::config("JWT_ISSUER is required"))?;
+        let jwt_audience =
+            env::var("JWT_AUDIENCE").map_err(|_| AppError::config("JWT_AUDIENCE is required"))?;
+        let jwt_access_ttl_secs: i64 = env::var("JWT_ACCESS_TTL_SECS")
+            .unwrap_or_else(|_| "900".to_string())
+            .parse()
+            .map_err(|_| AppError::config("JWT_ACCESS_TTL_SECS must be i64"))?;
+        let refresh_ttl_secs: i64 = env::var("REFRESH_TTL_SECS")
+            .unwrap_or_else(|_| "2592000".to_string())
+            .parse()
+            .map_err(|_| AppError::config("REFRESH_TTL_SECS must be i64"))?;
+        let session_ttl_secs: i64 = env::var("SESSION_TTL_SECS")
+            .unwrap_or_else(|_| "2592000".to_string())
+            .parse()
+            .map_err(|_| AppError::config("SESSION_TTL_SECS must be i64"))?;
+        if jwt_access_ttl_secs <= 0 || refresh_ttl_secs <= 0 || session_ttl_secs <= 0 {
+            return Err(AppError::config("token/session TTLs must be > 0"));
+        }
 
         Ok(Self {
             host,
@@ -113,6 +142,13 @@ impl Config {
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
+            jwt_signing_key_pem,
+            jwt_kid,
+            jwt_issuer,
+            jwt_audience,
+            jwt_access_ttl_secs,
+            refresh_ttl_secs,
+            session_ttl_secs,
         })
     }
 }
