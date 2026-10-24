@@ -9,6 +9,7 @@ use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::error::AppError;
+use crate::infra::db;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
@@ -30,10 +31,7 @@ struct HealthResponse {
 }
 
 async fn healthz() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(HealthResponse { status: "ok" }),
-    )
+    (StatusCode::OK, Json(HealthResponse { status: "ok" }))
 }
 
 #[derive(Serialize)]
@@ -43,14 +41,12 @@ struct ReadyResponse {
 
 async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     if state.config.readiness_require_db {
-        return Err(AppError::Unavailable);
+        db::ping(&state.db).await?;
     }
+
     if state.config.readiness_require_redis {
         return Err(AppError::Unavailable);
     }
 
-    Ok((
-        StatusCode::OK,
-        Json(ReadyResponse { status: "ready" }),
-    ))
+    Ok((StatusCode::OK, Json(ReadyResponse { status: "ready" })))
 }
