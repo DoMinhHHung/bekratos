@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Extension, State};
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
@@ -32,8 +32,8 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/restore", post(confirm_restore))
 }
 
-fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
-    addr.map(|a| a.0.ip().to_string())
+fn client_ip(addr: Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
+    addr.map(|Extension(ConnectInfo(peer))| peer.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -52,9 +52,20 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     Ok(token)
 }
 
-async fn register(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/register",
+    request_body = RegisterRequest,
+    responses(
+        (status = 200, description = "Registration request accepted", body = RegisterResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn register(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, AppError> {
     body.validate()
@@ -64,9 +75,20 @@ async fn register(
     Ok(Json(RegisterResponse { message }))
 }
 
-async fn verify_email(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/verify-email",
+    request_body = VerifyEmailRequest,
+    responses(
+        (status = 200, description = "Email verified", body = VerifyEmailResponse),
+        (status = 400, description = "Invalid or expired token"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn verify_email(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<VerifyEmailRequest>,
 ) -> Result<Json<VerifyEmailResponse>, AppError> {
     body.validate()
@@ -76,9 +98,20 @@ async fn verify_email(
     Ok(Json(VerifyEmailResponse { message }))
 }
 
-async fn resend_verification(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/resend-verification",
+    request_body = ResendVerificationRequest,
+    responses(
+        (status = 200, description = "Request accepted", body = ResendVerificationResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn resend_verification(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<ResendVerificationRequest>,
 ) -> Result<Json<ResendVerificationResponse>, AppError> {
     body.validate()
@@ -88,9 +121,21 @@ async fn resend_verification(
     Ok(Json(ResendVerificationResponse { message }))
 }
 
-async fn login(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/login",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Login successful", body = LoginResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Invalid credentials"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn login(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, AppError> {
@@ -104,9 +149,19 @@ async fn login(
     Ok(Json(resp))
 }
 
-async fn logout(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/logout",
+    responses(
+        (status = 200, description = "Logged out", body = LogoutResponse),
+        (status = 401, description = "Invalid access token")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Authentication"
+)]
+pub(crate) async fn logout(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
 ) -> Result<Json<LogoutResponse>, AppError> {
     let token = extract_bearer(&headers)?;
@@ -115,9 +170,21 @@ async fn logout(
     Ok(Json(LogoutResponse { message }))
 }
 
-async fn refresh(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/refresh",
+    request_body = RefreshRequest,
+    responses(
+        (status = 200, description = "Tokens refreshed", body = RefreshResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Invalid or reused refresh token"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn refresh(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<RefreshRequest>,
 ) -> Result<Json<RefreshResponse>, AppError> {
@@ -136,9 +203,20 @@ async fn refresh(
     }))
 }
 
-async fn forgot_password(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/forgot-password",
+    request_body = ForgotPasswordRequest,
+    responses(
+        (status = 200, description = "Request accepted", body = ForgotPasswordResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn forgot_password(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<ForgotPasswordRequest>,
 ) -> Result<Json<ForgotPasswordResponse>, AppError> {
     body.validate()
@@ -148,9 +226,20 @@ async fn forgot_password(
     Ok(Json(ForgotPasswordResponse { message }))
 }
 
-async fn reset_password(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/reset-password",
+    request_body = ResetPasswordRequest,
+    responses(
+        (status = 200, description = "Password reset", body = ResetPasswordResponse),
+        (status = 400, description = "Invalid or expired token"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn reset_password(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<ResetPasswordRequest>,
 ) -> Result<Json<ResetPasswordResponse>, AppError> {
     body.validate()
@@ -160,9 +249,22 @@ async fn reset_password(
     Ok(Json(ResetPasswordResponse { message }))
 }
 
-async fn change_password(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/change-password",
+    request_body = ChangePasswordRequest,
+    responses(
+        (status = 200, description = "Password changed", body = ChangePasswordResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Invalid access token or current password"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Authentication"
+)]
+pub(crate) async fn change_password(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Result<Json<ChangePasswordResponse>, AppError> {
@@ -181,9 +283,20 @@ async fn change_password(
     Ok(Json(ChangePasswordResponse { message }))
 }
 
-async fn request_restore(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/request-restore",
+    request_body = RestoreRequestBody,
+    responses(
+        (status = 200, description = "Request accepted", body = RestoreResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn request_restore(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<RestoreRequestBody>,
 ) -> Result<Json<RestoreResponse>, AppError> {
     body.validate()
@@ -193,9 +306,20 @@ async fn request_restore(
     Ok(Json(RestoreResponse { message }))
 }
 
-async fn confirm_restore(
+#[utoipa::path(
+    post,
+    path = "/v1/auth/restore",
+    request_body = RestoreConfirmRequest,
+    responses(
+        (status = 200, description = "Account restored", body = RestoreResponse),
+        (status = 400, description = "Invalid or expired token"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    tag = "Authentication"
+)]
+pub(crate) async fn confirm_restore(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     Json(body): Json<RestoreConfirmRequest>,
 ) -> Result<Json<RestoreResponse>, AppError> {
     body.validate()
@@ -203,4 +327,18 @@ async fn confirm_restore(
     let ip = client_ip(addr);
     let message = service::confirm_restore(&state, &ip, &body.token).await?;
     Ok(Json(RestoreResponse { message }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::client_ip;
+    use axum::extract::{ConnectInfo, Extension};
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn client_ip_uses_only_the_connection_peer() {
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 8080);
+        assert_eq!(client_ip(Some(Extension(ConnectInfo(peer)))), "192.0.2.10");
+        assert_eq!(client_ip(None), "unknown");
+    }
 }

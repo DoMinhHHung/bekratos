@@ -103,8 +103,7 @@ impl Config {
             .unwrap_or_else(|_| "1".to_string())
             .parse()
             .map_err(|_| AppError::config("ARGON2_PARALLELISM must be u32"))?;
-        let jwt_signing_key_pem = env::var("JWT_SIGNING_KEY_PEM")
-            .map_err(|_| AppError::config("JWT_SIGNING_KEY_PEM is required"))?;
+        let jwt_signing_key_pem = env::var("JWT_SIGNING_KEY_PEM").unwrap_or_default();
         let jwt_kid = env::var("JWT_KID").unwrap_or_else(|_| "es256-1".to_string());
         let jwt_issuer =
             env::var("JWT_ISSUER").map_err(|_| AppError::config("JWT_ISSUER is required"))?;

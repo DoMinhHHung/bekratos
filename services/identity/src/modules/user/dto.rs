@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 use validator::Validate;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ProfileResponse {
     pub id: Uuid,
     pub status: String,
@@ -15,7 +16,7 @@ pub struct ProfileResponse {
     pub timezone: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct UpdateProfileRequest {
     #[validate(length(max = 120))]
     pub full_name: Option<String>,
@@ -29,7 +30,7 @@ pub struct UpdateProfileRequest {
     pub timezone: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionItem {
     pub id: Uuid,
     pub ip: Option<String>,
@@ -41,12 +42,12 @@ pub struct SessionItem {
     pub is_current: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SessionListResponse {
     pub sessions: Vec<SessionItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct MessageResponse {
     pub message: String,
 }

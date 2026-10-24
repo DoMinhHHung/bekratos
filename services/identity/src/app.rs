@@ -23,30 +23,54 @@ pub fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        .merge(crate::openapi::swagger_ui())
         .merge(auth::routes::router())
         .merge(user::routes::router())
         .merge(jwks::routes::router())
         .layer(TraceLayer::new_for_http())
-        .layer(TimeoutLayer::new(timeout))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            timeout,
+        ))
         .layer(RequestBodyLimitLayer::new(body_limit))
         .with_state(state)
 }
 
-#[derive(Serialize)]
-struct HealthResponse {
-    status: &'static str,
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct HealthResponse {
+    status: String,
 }
 
-async fn healthz() -> impl IntoResponse {
-    (StatusCode::OK, Json(HealthResponse { status: "ok" }))
+#[utoipa::path(
+    get,
+    path = "/healthz",
+    responses((status = 200, description = "Service is alive", body = HealthResponse)),
+    tag = "Health"
+)]
+pub(crate) async fn healthz() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(HealthResponse {
+            status: "ok".into(),
+        }),
+    )
 }
 
-#[derive(Serialize)]
-struct ReadyResponse {
-    status: &'static str,
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct ReadyResponse {
+    status: String,
 }
 
-async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
+#[utoipa::path(
+    get,
+    path = "/readyz",
+    responses(
+        (status = 200, description = "Service dependencies are ready", body = ReadyResponse),
+        (status = 503, description = "A required dependency is unavailable")
+    ),
+    tag = "Health"
+)]
+pub(crate) async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     if state.config.readiness_require_db {
         db::ping(&state.db).await?;
     }
@@ -56,5 +80,10 @@ async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppE
         redis_infra::ping(&mut conn).await?;
     }
 
-    Ok((StatusCode::OK, Json(ReadyResponse { status: "ready" })))
+    Ok((
+        StatusCode::OK,
+        Json(ReadyResponse {
+            status: "ready".into(),
+        }),
+    ))
 }

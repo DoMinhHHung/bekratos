@@ -1,0 +1,5 @@
+[allowlist]
+description = "Synthetic JWKS integration-test key from the initial Phase 10 commit"
+condition = "AND"
+commits = ["eee70bd037aab8fe0c7508d748d974f8e691a535"]
+paths = ['''^services/identity/tests/jwks_lifecycle\.rs$''']
