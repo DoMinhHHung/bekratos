@@ -92,6 +92,28 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    pub async fn list_active_for_user(&self, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
+        sqlx::query_as::<_, SessionRow>(
+            r#"
+            SELECT
+                id, user_id, ip, user_agent, device_name,
+                last_seen_at, expires_at, revoked_at, revoked_reason, created_at
+            FROM session.sessions
+            WHERE user_id = $1
+              AND revoked_at IS NULL
+              AND expires_at > now()
+            ORDER BY last_seen_at DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "list active sessions for user failed");
+            AppError::Internal
+        })
+    }
+
     pub async fn find_by_id_for_update_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,

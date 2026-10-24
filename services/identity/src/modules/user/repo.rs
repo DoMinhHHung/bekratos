@@ -5,6 +5,8 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+type ProfileRow = (String, Option<String>, Option<String>, Option<String>);
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRow {
     pub id: Uuid,
@@ -350,4 +352,121 @@ fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
     }
     tracing::error!(error = %err, "{context}");
     AppError::Internal
+}
+
+impl<'a> UserRepo<'a> {
+    pub async fn find_profile(&self, user_id: Uuid) -> AppResult<Option<ProfileRow>> {
+        let row: Option<ProfileRow> = sqlx::query_as(
+            r#"
+            SELECT
+                u.status,
+                p.full_name,
+                p.display_name,
+                p.avatar_url
+            FROM "user".users u
+            LEFT JOIN "user".user_profile p ON p.user_id = u.id
+            WHERE u.id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "find profile failed");
+            AppError::Internal
+        })?;
+        Ok(row)
+    }
+
+    pub async fn find_primary_email(&self, user_id: Uuid) -> AppResult<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT email FROM "user".user_emails
+            WHERE user_id = $1 AND is_primary = true
+            LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "find primary email failed");
+            AppError::Internal
+        })?;
+        Ok(row.map(|r| r.0))
+    }
+
+    pub async fn find_username(&self, user_id: Uuid) -> AppResult<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT username FROM "user".user_usernames WHERE user_id = $1 LIMIT 1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "find username failed");
+            AppError::Internal
+        })?;
+        Ok(row.map(|r| r.0))
+    }
+
+    pub async fn update_profile_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        full_name: Option<&str>,
+        display_name: Option<&str>,
+        avatar_url: Option<&str>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            r#"
+            UPDATE "user".user_profile
+            SET
+                full_name = COALESCE($2, full_name),
+                display_name = COALESCE($3, display_name),
+                avatar_url = COALESCE($4, avatar_url),
+                updated_at = now()
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .bind(full_name)
+        .bind(display_name)
+        .bind(avatar_url)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "update profile failed");
+            AppError::Internal
+        })?;
+        Ok(())
+    }
+    pub async fn update_user_meta_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        locale: Option<&str>,
+        timezone: Option<&str>,
+    ) -> AppResult<()> {
+        sqlx::query(
+            r#"
+                UPDATE "user".users
+                SET
+                    locale = COALESCE($2, locale),
+                    timezone = COALESCE($3, timezone),
+                    updated_at = now()
+                WHERE id = $1
+                "#,
+        )
+        .bind(user_id)
+        .bind(locale)
+        .bind(timezone)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "update user meta failed");
+            AppError::Internal
+        })?;
+        Ok(())
+    }
 }
