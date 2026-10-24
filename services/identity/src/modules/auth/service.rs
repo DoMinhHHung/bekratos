@@ -817,6 +817,14 @@ pub async fn change_password(
         ));
     }
 
+    let user = UserRepo::new(&state.db)
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if user.status != "active" {
+        return Err(AppError::Unauthorized);
+    }
+
     let current = current_password.to_string();
     let new_pw = new_password.to_string();
     let policy = state.password_policy.clone();
@@ -836,9 +844,12 @@ pub async fn change_password(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
+    let current_hash_for_verify = current_hash.clone();
     let policy_v = policy.clone();
-    let current_ok =
-        with_argon_permit(state, move || policy_v.verify(&current, &current_hash)).await?;
+    let current_ok = with_argon_permit(state, move || {
+        policy_v.verify(&current, &current_hash_for_verify)
+    })
+    .await?;
 
     if !current_ok {
         return Err(AppError::Unauthorized);
@@ -874,7 +885,16 @@ pub async fn change_password(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    if session.user_id != user_id || session.revoked_at.is_some() {
+    if session.user_id != user_id
+        || session.revoked_at.is_some()
+        || session.expires_at <= Utc::now()
+    {
+        let _ = tx.rollback().await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let locked_hash = CredentialRepo::find_password_hash_tx(&mut tx, user_id).await?;
+    if locked_hash.as_deref() != Some(current_hash.as_str()) {
         let _ = tx.rollback().await;
         return Err(AppError::Unauthorized);
     }

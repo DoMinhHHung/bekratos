@@ -7,6 +7,16 @@ use crate::error::{AppError, AppResult};
 
 type ProfileRow = (String, Option<String>, Option<String>, Option<String>);
 
+#[derive(Debug, Clone)]
+pub struct ProfileBundle {
+    pub user: UserRow,
+    pub full_name: Option<String>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub email: Option<String>,
+    pub username: Option<String>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRow {
     pub id: Uuid,
@@ -355,19 +365,7 @@ fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
 }
 
 impl<'a> UserRepo<'a> {
-    pub async fn load_profile_bundle(
-        &self,
-        user_id: Uuid,
-    ) -> AppResult<
-        Option<(
-            UserRow,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )>,
-    > {
+    pub async fn load_profile_bundle(&self, user_id: Uuid) -> AppResult<Option<ProfileBundle>> {
         #[derive(sqlx::FromRow)]
         struct Bundle {
             id: Uuid,
@@ -416,25 +414,23 @@ impl<'a> UserRepo<'a> {
             tracing::error!(error = %e, %user_id, "load profile bundle failed");
             AppError::Internal
         })?;
-        Ok(row.map(|b| {
-            (
-                UserRow {
-                    id: b.id,
-                    status: b.status,
-                    status_before_deletion: b.status_before_deletion,
-                    locale: b.locale,
-                    timezone: b.timezone,
-                    deletion_requested_at: b.deletion_requested_at,
-                    purge_after: b.purge_after,
-                    created_at: b.created_at,
-                    updated_at: b.updated_at,
-                },
-                b.full_name,
-                b.display_name,
-                b.avatar_url,
-                b.email,
-                b.username,
-            )
+        Ok(row.map(|b| ProfileBundle {
+            user: UserRow {
+                id: b.id,
+                status: b.status,
+                status_before_deletion: b.status_before_deletion,
+                locale: b.locale,
+                timezone: b.timezone,
+                deletion_requested_at: b.deletion_requested_at,
+                purge_after: b.purge_after,
+                created_at: b.created_at,
+                updated_at: b.updated_at,
+            },
+            full_name: b.full_name,
+            display_name: b.display_name,
+            avatar_url: b.avatar_url,
+            email: b.email,
+            username: b.username,
         }))
     }
 
