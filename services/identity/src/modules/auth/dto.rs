@@ -63,3 +63,17 @@ pub struct LoginResponse {
 pub struct LogoutResponse {
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct RefreshRequest {
+    #[validate(length(min = 32, max = 128, message = "invalid refresh token"))]
+    pub refresh_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: i64,
+}

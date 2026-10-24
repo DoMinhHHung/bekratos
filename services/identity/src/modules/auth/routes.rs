@@ -12,6 +12,7 @@ use super::dto::{
 };
 use super::service;
 use crate::error::AppError;
+use crate::modules::auth::dto::{RefreshRequest, RefreshResponse};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -21,6 +22,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/resend-verification", post(resend_verification))
         .route("/v1/auth/login", post(login))
         .route("/v1/auth/logout", post(logout))
+        .route("/v1/auth/refresh", post(refresh))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -104,4 +106,25 @@ async fn logout(
     let ip = client_ip(addr);
     let message = service::logout(&state, token, &ip).await?;
     Ok(Json(LogoutResponse { message }))
+}
+
+async fn refresh(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<RefreshRequest>,
+) -> Result<Json<RefreshResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let ua = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok());
+    let resp = service::refresh(&state, &ip, ua, &body.refresh_token).await?;
+    Ok(Json(RefreshResponse {
+        access_token: resp.access_token,
+        refresh_token: resp.refresh_token,
+        token_type: resp.token_type,
+        expires_in: resp.expires_in,
+    }))
 }

@@ -508,3 +508,116 @@ async fn insert_security_event_tx(
     })?;
     Ok(())
 }
+
+pub async fn refresh(
+    state: &AppState,
+    ip: &str,
+    user_agent: Option<&str>,
+    raw_refresh: &str,
+) -> AppResult<LoginResponse> {
+    state
+        .rate_limiter
+        .check_and_incr("refresh", "ip", ip, 60, 900)
+        .await?;
+
+    let token_hash = hash_token(raw_refresh);
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin refresh transaction failed");
+        AppError::Internal
+    })?;
+
+    let existing = RefreshTokenRepo::find_by_hash_for_update_tx(&mut tx, &token_hash)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    if existing.revoked_at.is_some() || existing.used_at.is_some() {
+        let session_id = existing.session_id;
+        SessionRepo::revoke_tx(&mut tx, session_id, "refresh_reuse").await?;
+        RefreshTokenRepo::revoke_all_for_session_tx(&mut tx, session_id).await?;
+
+        insert_security_event_tx(
+            &mut tx,
+            "refresh_reuse_detected",
+            None,
+            Some(session_id),
+            Some(ip),
+            user_agent,
+        )
+        .await?;
+
+        tx.commit().await.map_err(|e| {
+            tracing::error!(error = %e, "commit reuse revoke failed");
+            AppError::Internal
+        })?;
+
+        return Err(AppError::Unauthorized);
+    }
+
+    if existing.expires_at <= Utc::now() {
+        let _ = tx.rollback().await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let session = SessionRepo::find_by_id_for_update_tx(&mut tx, existing.session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    if session.revoked_at.is_some() || session.expires_at <= Utc::now() {
+        RefreshTokenRepo::revoke_all_for_session_tx(&mut tx, session.id).await?;
+        let _ = tx.commit().await;
+        return Err(AppError::Unauthorized);
+    }
+
+    RefreshTokenRepo::mark_used_tx(&mut tx, existing.id).await?;
+
+    let new_refresh_id = Uuid::now_v7();
+    let now = Utc::now();
+    let refresh_expires = now + ChronoDuration::seconds(state.config.refresh_ttl_secs);
+    let refresh_expires = if refresh_expires > session.expires_at {
+        session.expires_at
+    } else {
+        refresh_expires
+    };
+
+    let raw_new = generate_opaque_token();
+    let new_hash = hash_token(&raw_new);
+
+    RefreshTokenRepo::insert_tx(
+        &mut tx,
+        new_refresh_id,
+        session.id,
+        Some(existing.id),
+        &new_hash,
+        refresh_expires,
+    )
+    .await?;
+
+    SessionRepo::touch_last_seen_tx(&mut tx, session.id).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "refresh_success",
+        Some(session.user_id),
+        Some(session.id),
+        Some(ip),
+        user_agent,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit refresh transaction failed");
+        AppError::Internal
+    })?;
+
+    let access_token = state
+        .jwt_signer
+        .issue_access_token(session.user_id, session.id)?;
+
+    Ok(LoginResponse {
+        access_token,
+        refresh_token: raw_new,
+        token_type: "Bearer".to_string(),
+        expires_in: state.jwt_signer.access_ttl_secs(),
+    })
+}
