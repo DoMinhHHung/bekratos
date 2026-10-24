@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -61,6 +61,96 @@ impl<'a> TokenRepo<'a> {
             tracing::error!(error = %e, "insert verification token failed");
             AppError::Internal
         })
+    }
+
+    pub async fn insert_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        id: Uuid,
+        user_id: Uuid,
+        purpose: &str,
+        email: &str,
+        expires_at: DateTime<Utc>,
+    ) -> AppResult<VerificationTokenRow> {
+        sqlx::query_as::<_, VerificationTokenRow>(
+            r#"
+            INSERT INTO token.verification_tokens (
+                id, user_id, purpose, email, expires_at, next_attempt_at
+            )
+            VALUES ($1, $2, $3, $4, $5, now())
+            RETURNING
+                id, user_id, purpose, email, expires_at,
+                consumed_at, revoked_at, sent_at, delivery_attempts,
+                next_attempt_at, lease_until, last_delivery_error_code, created_at
+            "#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(purpose)
+        .bind(email)
+        .bind(expires_at)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "insert verification token tx failed");
+            AppError::Internal
+        })
+    }
+
+    pub async fn revoke_active_for_user_purpose_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        purpose: &str,
+    ) -> AppResult<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE token.verification_tokens
+            SET revoked_at = now()
+            WHERE user_id = $1
+              AND purpose = $2
+              AND consumed_at IS NULL
+              AND revoked_at IS NULL
+            "#,
+        )
+        .bind(user_id)
+        .bind(purpose)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "revoke active tokens failed");
+            AppError::Internal
+        })?;
+        Ok(result.rows_affected())
+    }
+
+    pub async fn consume_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        id: Uuid,
+        purpose: &str,
+    ) -> AppResult<Option<VerificationTokenRow>> {
+        let row = sqlx::query_as::<_, VerificationTokenRow>(
+            r#"
+            UPDATE token.verification_tokens
+            SET consumed_at = now()
+            WHERE id = $1
+              AND purpose = $2
+              AND consumed_at IS NULL
+              AND revoked_at IS NULL
+              AND expires_at > now()
+            RETURNING
+                id, user_id, purpose, email, expires_at,
+                consumed_at, revoked_at, sent_at, delivery_attempts,
+                next_attempt_at, lease_until, last_delivery_error_code, created_at
+            "#,
+        )
+        .bind(id)
+        .bind(purpose)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %id, "consume verification token failed");
+            AppError::Internal
+        })?;
+        Ok(row)
     }
 
     pub async fn claim_due_for_delivery(

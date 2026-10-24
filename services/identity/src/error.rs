@@ -25,6 +25,9 @@ pub enum AppError {
 
     #[error("too many requests")]
     TooManyRequests,
+
+    #[error("conflict")]
+    Conflict,
 }
 
 impl AppError {
@@ -40,6 +43,7 @@ impl AppError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
+            Self::Conflict => StatusCode::CONFLICT,
         }
     }
 
@@ -51,6 +55,7 @@ impl AppError {
             Self::NotFound => "not_found",
             Self::BadRequest(_) => "bad_request",
             Self::TooManyRequests => "too_many_requests",
+            Self::Conflict => "conflict",
         }
     }
 
@@ -62,6 +67,7 @@ impl AppError {
             Self::NotFound => "not found".to_string(),
             Self::BadRequest(msg) => msg.clone(),
             Self::TooManyRequests => "too many requests".to_string(),
+            Self::Conflict => "conflict".to_string(),
         }
     }
 }
