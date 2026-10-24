@@ -224,3 +224,189 @@ fn signer_debug_and_public_key_derivation_do_not_expose_private_material() {
     assert!(debug.contains("debug-key"));
     assert!(!debug.contains("PRIVATE KEY"));
 }
+
+#[test]
+fn signer_rejects_nonpositive_ttls_and_blank_identifiers() {
+    let pem = SigningKey::random(&mut OsRng)
+        .to_pkcs8_pem(LineEnding::LF)
+        .unwrap();
+    for (kid, issuer, audience, ttl) in [
+        ("key", "identity", "api", 0),
+        ("key", "identity", "api", -1),
+        ("", "identity", "api", 900),
+        (" \t", "identity", "api", 900),
+        ("key", "\n", "api", 900),
+        ("key", "identity", " ", 900),
+    ] {
+        assert!(matches!(
+            JwtSigner::from_pem(&pem, kid.into(), issuer.into(), audience.into(), ttl),
+            Err(identity::AppError::Config(_))
+        ));
+    }
+}
+
+#[test]
+fn malformed_private_keys_are_configuration_errors() {
+    for pem in [
+        "",
+        "not a PEM",
+        "-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----",
+    ] {
+        assert!(matches!(
+            JwtSigner::from_pem(pem, "key".into(), "identity".into(), "api".into(), 900),
+            Err(identity::AppError::Config(_))
+        ));
+        assert!(matches!(
+            public_pem_from_private_pem(pem),
+            Err(identity::AppError::Config(_))
+        ));
+    }
+}
+
+#[tokio::test]
+async fn issued_claims_use_the_configured_ttl_and_current_time() {
+    let (signer, public_pem) = make_signer("ttl-key", "identity", "bekratos-api");
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    verifier
+        .insert_key("ttl-key".into(), &public_pem)
+        .await
+        .unwrap();
+    let before = chrono::Utc::now().timestamp();
+    let token = signer
+        .issue_access_token(Uuid::now_v7(), Uuid::now_v7())
+        .unwrap();
+    let after = chrono::Utc::now().timestamp();
+    let claims = verifier.verify_access_token_async(&token).await.unwrap();
+    assert!((before..=after).contains(&claims.iat));
+    assert_eq!(claims.nbf, claims.iat);
+    assert_eq!(claims.exp - claims.iat, 900);
+    assert_eq!(signer.access_ttl_secs(), 900);
+    assert_eq!(signer.kid(), "ttl-key");
+    assert_eq!(signer.issuer(), "identity");
+    assert_eq!(signer.audience(), "bekratos-api");
+}
+
+#[tokio::test]
+async fn clearing_a_cloned_verifier_revokes_all_shared_keys() {
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    let mut tokens = Vec::new();
+    for kid in ["first", "second"] {
+        let (signer, public_pem) = make_signer(kid, "identity", "bekratos-api");
+        verifier.insert_key(kid.into(), &public_pem).await.unwrap();
+        let token = signer
+            .issue_access_token(Uuid::now_v7(), Uuid::now_v7())
+            .unwrap();
+        assert!(verifier.verify_access_token(&token).is_ok());
+        tokens.push(token);
+    }
+    let cloned = verifier.clone();
+    cloned.clear().await.unwrap();
+    for token in tokens {
+        assert!(matches!(
+            verifier.verify_access_token(&token),
+            Err(identity::AppError::Unauthorized)
+        ));
+        assert!(matches!(
+            cloned.verify_access_token_async(&token).await,
+            Err(identity::AppError::Unauthorized)
+        ));
+    }
+    cloned.clear().await.unwrap();
+    cloned.remove_key("already-absent").await.unwrap();
+}
+
+#[tokio::test]
+async fn replacing_a_key_under_the_same_id_rejects_old_signatures() {
+    let (old_signer, old_public) = make_signer("reused-kid", "identity", "bekratos-api");
+    let (new_signer, new_public) = make_signer("reused-kid", "identity", "bekratos-api");
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    verifier
+        .insert_key("reused-kid".into(), &old_public)
+        .await
+        .unwrap();
+    let old_token = old_signer
+        .issue_access_token(Uuid::now_v7(), Uuid::now_v7())
+        .unwrap();
+    assert!(verifier.verify_access_token(&old_token).is_ok());
+    verifier
+        .insert_key("reused-kid".into(), &new_public)
+        .await
+        .unwrap();
+    assert!(matches!(
+        verifier.verify_access_token(&old_token),
+        Err(identity::AppError::Unauthorized)
+    ));
+    let new_token = new_signer
+        .issue_access_token(Uuid::now_v7(), Uuid::now_v7())
+        .unwrap();
+    assert!(verifier.verify_access_token(&new_token).is_ok());
+}
+
+#[tokio::test]
+async fn invalid_key_insert_does_not_discard_a_working_key() {
+    let (signer, public_pem) = make_signer("working", "identity", "bekratos-api");
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    verifier
+        .insert_key("working".into(), &public_pem)
+        .await
+        .unwrap();
+    assert!(matches!(
+        verifier.insert_key("working".into(), "invalid PEM").await,
+        Err(identity::AppError::Internal)
+    ));
+    let token = signer
+        .issue_access_token(Uuid::now_v7(), Uuid::now_v7())
+        .unwrap();
+    assert!(verifier.verify_access_token(&token).is_ok());
+}
+
+#[tokio::test]
+async fn rejects_missing_key_ids_and_incomplete_or_wrongly_typed_claims() {
+    let key = SigningKey::random(&mut OsRng);
+    let private_pem = key.to_pkcs8_pem(LineEnding::LF).unwrap();
+    let public_pem = public_pem_from_private_pem(&private_pem).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(private_pem.as_bytes()).unwrap();
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    verifier
+        .insert_key("claims-key".into(), &public_pem)
+        .await
+        .unwrap();
+    let now = chrono::Utc::now().timestamp();
+    let claims = serde_json::json!({
+        "sub": Uuid::now_v7().to_string(), "sid": Uuid::now_v7().to_string(),
+        "iss": "identity", "aud": "bekratos-api", "iat": now, "nbf": now, "exp": now + 900
+    });
+    let mut header = Header::new(Algorithm::ES256);
+    let no_kid = encode(&header, &claims, &encoding_key).unwrap();
+    assert!(matches!(
+        verifier.verify_access_token(&no_kid),
+        Err(identity::AppError::Unauthorized)
+    ));
+    header.kid = Some("claims-key".into());
+    let valid_token = encode(&header, &claims, &encoding_key).unwrap();
+    assert!(verifier.verify_access_token(&valid_token).is_ok());
+    for field in ["sub", "sid", "iss", "aud", "iat", "nbf", "exp"] {
+        for replacement in [None, Some(serde_json::json!({"invalid": true}))] {
+            let mut invalid = claims.clone();
+            if let Some(value) = replacement {
+                invalid[field] = value;
+            } else {
+                invalid.as_object_mut().unwrap().remove(field);
+            }
+            let token = encode(&header, &invalid, &encoding_key).unwrap();
+            assert!(
+                matches!(
+                    verifier.verify_access_token(&token),
+                    Err(identity::AppError::Unauthorized)
+                ),
+                "accepted invalid {field}"
+            );
+        }
+    }
+    for malformed in ["", "not-a-token", "a.b.c", "a.b.c.d"] {
+        assert!(matches!(
+            verifier.verify_access_token(malformed),
+            Err(identity::AppError::Unauthorized)
+        ));
+    }
+}
