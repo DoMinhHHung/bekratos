@@ -10,6 +10,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::error::AppError;
 use crate::infra::db;
+use crate::infra::redis as redis_infra;
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
@@ -45,7 +46,8 @@ async fn readyz(State(state): State<AppState>) -> Result<impl IntoResponse, AppE
     }
 
     if state.config.readiness_require_redis {
-        return Err(AppError::Unavailable);
+        let mut conn = state.redis.clone();
+        redis_infra::ping(&mut conn).await?;
     }
 
     Ok((StatusCode::OK, Json(ReadyResponse { status: "ready" })))

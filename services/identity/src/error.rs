@@ -22,6 +22,9 @@ pub enum AppError {
 
     #[error("bad request")]
     BadRequest(String),
+
+    #[error("too many requests")]
+    TooManyRequests,
 }
 
 impl AppError {
@@ -36,6 +39,7 @@ impl AppError {
             Self::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::TooManyRequests => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 
@@ -46,6 +50,7 @@ impl AppError {
             Self::Unavailable => "service_unavailable",
             Self::NotFound => "not_found",
             Self::BadRequest(_) => "bad_request",
+            Self::TooManyRequests => "too_many_requests",
         }
     }
 
@@ -56,6 +61,7 @@ impl AppError {
             Self::Unavailable => "service unavailable".to_string(),
             Self::NotFound => "not found".to_string(),
             Self::BadRequest(msg) => msg.clone(),
+            Self::TooManyRequests => "too many requests".to_string(),
         }
     }
 }

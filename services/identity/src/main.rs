@@ -4,6 +4,7 @@ use std::time::Duration;
 use identity::infra::db;
 use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
 use identity::infra::password::PasswordPolicy;
+use identity::infra::redis as redis_infra;
 use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
 use identity::jobs::email_worker::{EmailWorker, EmailWorkerConfig};
 use identity::{build_router, AppState, Config};
@@ -66,6 +67,14 @@ async fn main() {
         std::process::exit(1);
     }
 
+    let redis = match redis_infra::connect(&config.redis_url).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to connect to redis");
+            std::process::exit(1);
+        }
+    };
+
     let mailer: Arc<dyn Mailer> = match config.mail_provider.as_str() {
         "console" => Arc::new(ConsoleMailer {
             from: config.mail_from.clone(),
@@ -93,7 +102,7 @@ async fn main() {
     });
 
     let addr = config.bind_addr;
-    let state = AppState::new(config, pool);
+    let state = AppState::new(config, pool, redis);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {
