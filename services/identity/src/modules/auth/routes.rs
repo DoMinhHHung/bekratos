@@ -7,12 +7,13 @@ use axum::{Json, Router};
 use validator::Validate;
 
 use super::dto::{
-    LoginRequest, LoginResponse, LogoutResponse, RegisterRequest, RegisterResponse,
-    ResendVerificationRequest, ResendVerificationResponse, VerifyEmailRequest, VerifyEmailResponse,
+    ChangePasswordRequest, ChangePasswordResponse, ForgotPasswordRequest, ForgotPasswordResponse,
+    LoginRequest, LoginResponse, LogoutResponse, RefreshRequest, RefreshResponse, RegisterRequest,
+    RegisterResponse, ResendVerificationRequest, ResendVerificationResponse, ResetPasswordRequest,
+    ResetPasswordResponse, VerifyEmailRequest, VerifyEmailResponse,
 };
 use super::service;
 use crate::error::AppError;
-use crate::modules::auth::dto::{RefreshRequest, RefreshResponse};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -23,6 +24,9 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/login", post(login))
         .route("/v1/auth/logout", post(logout))
         .route("/v1/auth/refresh", post(refresh))
+        .route("/v1/auth/forgot-password", post(forgot_password))
+        .route("/v1/auth/reset-password", post(reset_password))
+        .route("/v1/auth/change-password", post(change_password))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -127,4 +131,49 @@ async fn refresh(
         token_type: resp.token_type,
         expires_in: resp.expires_in,
     }))
+}
+
+async fn forgot_password(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<ForgotPasswordRequest>,
+) -> Result<Json<ForgotPasswordResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::forgot_password(&state, &ip, &body.email).await?;
+    Ok(Json(ForgotPasswordResponse { message }))
+}
+
+async fn reset_password(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<ResetPasswordRequest>,
+) -> Result<Json<ResetPasswordResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::reset_password(&state, &ip, &body.token, &body.new_password).await?;
+    Ok(Json(ResetPasswordResponse { message }))
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(body): Json<ChangePasswordRequest>,
+) -> Result<Json<ChangePasswordResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let token = extract_bearer(&headers)?;
+    let ip = client_ip(addr);
+    let message = service::change_password(
+        &state,
+        token,
+        &ip,
+        &body.current_password,
+        &body.new_password,
+    )
+    .await?;
+    Ok(Json(ChangePasswordResponse { message }))
 }

@@ -155,6 +155,47 @@ impl<'a> SessionRepo<'a> {
         })?;
         Ok(())
     }
+
+    pub async fn revoke_all_for_user_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        reason: &str,
+        except_session_id: Option<Uuid>,
+    ) -> AppResult<u64> {
+        let res = if let Some(except) = except_session_id {
+            sqlx::query(
+                r#"
+                UPDATE session.sessions
+                SET revoked_at = now(), revoked_reason = $2
+                WHERE user_id = $1
+                  AND revoked_at IS NULL
+                  AND id <> $3
+                "#,
+            )
+            .bind(user_id)
+            .bind(reason)
+            .bind(except)
+            .execute(&mut **tx)
+            .await
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE session.sessions
+                SET revoked_at = now(), revoked_reason = $2
+                WHERE user_id = $1 AND revoked_at IS NULL
+                "#,
+            )
+            .bind(user_id)
+            .bind(reason)
+            .execute(&mut **tx)
+            .await
+        }
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "revoke all sessions for user failed");
+            AppError::Internal
+        })?;
+        Ok(res.rows_affected())
+    }
 }
 
 pub struct RefreshTokenRepo;
@@ -249,6 +290,49 @@ impl RefreshTokenRepo {
         .await
         .map_err(|e| {
             tracing::error!(error = %e, %session_id, "revoke session refresh tokens failed");
+            AppError::Internal
+        })?;
+        Ok(res.rows_affected())
+    }
+
+    pub async fn revoke_all_for_user_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        except_session_id: Option<Uuid>,
+    ) -> AppResult<u64> {
+        let res = if let Some(except) = except_session_id {
+            sqlx::query(
+                r#"
+                UPDATE session.refresh_tokens rt
+                SET revoked_at = now()
+                FROM session.sessions s
+                WHERE rt.session_id = s.id
+                  AND s.user_id = $1
+                  AND rt.revoked_at IS NULL
+                  AND s.id <> $2
+                "#,
+            )
+            .bind(user_id)
+            .bind(except)
+            .execute(&mut **tx)
+            .await
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE session.refresh_tokens rt
+                SET revoked_at = now()
+                FROM session.sessions s
+                WHERE rt.session_id = s.id
+                  AND s.user_id = $1
+                  AND rt.revoked_at IS NULL
+                "#,
+            )
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await
+        }
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "revoke all refresh tokens for user failed");
             AppError::Internal
         })?;
         Ok(res.rows_affected())
