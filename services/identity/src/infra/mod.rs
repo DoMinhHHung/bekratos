@@ -1,5 +1,6 @@
 pub mod db;
 pub mod jwt;
+pub mod key_crypto;
 pub mod mailer;
 pub mod password;
 pub mod redis;

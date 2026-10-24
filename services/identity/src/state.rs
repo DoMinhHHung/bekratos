@@ -4,7 +4,7 @@ use redis::aio::ConnectionManager;
 use sqlx::PgPool;
 
 use crate::config::Config;
-use crate::infra::jwt::JwtSigner;
+use crate::infra::jwt::{JwtSigner, JwtVerifier};
 use crate::infra::password::PasswordPolicy;
 use crate::infra::tokens::MagicLinkSigner;
 use crate::middleware::rate_limit::RateLimiter;
@@ -18,6 +18,7 @@ pub struct AppState {
     pub password_policy: PasswordPolicy,
     pub magic_link_signer: MagicLinkSigner,
     pub jwt_signer: JwtSigner,
+    pub jwt_verifier: JwtVerifier,
 }
 
 impl AppState {
@@ -28,6 +29,7 @@ impl AppState {
         password_policy: PasswordPolicy,
         magic_link_signer: MagicLinkSigner,
         jwt_signer: JwtSigner,
+        jwt_verifier: JwtVerifier,
     ) -> Self {
         let rate_limiter = RateLimiter::new(redis.clone());
         Self {
@@ -38,6 +40,7 @@ impl AppState {
             password_policy,
             magic_link_signer,
             jwt_signer,
+            jwt_verifier,
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
 
 pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<ProfileResponse> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let repo = UserRepo::new(&state.db);
@@ -45,7 +45,7 @@ pub async fn update_profile(
     access_token: &str,
     body: UpdateProfileRequest,
 ) -> AppResult<ProfileResponse> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
@@ -73,7 +73,7 @@ pub async fn update_profile(
 }
 
 pub async fn list_sessions(state: &AppState, access_token: &str) -> AppResult<SessionListResponse> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 
@@ -102,7 +102,7 @@ pub async fn revoke_session(
     access_token: &str,
     target_session_id: Uuid,
 ) -> AppResult<String> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 
@@ -130,7 +130,7 @@ pub async fn revoke_session(
 }
 
 pub async fn revoke_other_sessions(state: &AppState, access_token: &str) -> AppResult<String> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 

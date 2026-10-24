@@ -3,11 +3,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use identity::infra::db;
+use identity::infra::jwt::{public_pem_from_private_pem, JwtSigner, JwtVerifier};
+use identity::infra::key_crypto::KeyEncryptor;
 use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
 use identity::infra::password::PasswordPolicy;
 use identity::infra::redis as redis_infra;
 use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
 use identity::jobs::email_worker::{EmailWorker, EmailWorkerConfig};
+use identity::jobs::purge_accounts::PurgeWorker;
+use identity::jobs::rotate_keys::KeyReconcileWorker;
+use identity::modules::jwks::repo::JwksRepo;
+use identity::modules::jwks::service::{decrypt_private_pem, ensure_active_key};
 use identity::{build_router, AppState, Config};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -86,10 +92,9 @@ async fn main() {
         _ => Arc::new(NoopMailer),
     };
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
 
     let signer_for_worker = signer.clone();
-
     let worker = EmailWorker::new(
         pool.clone(),
         mailer,
@@ -102,33 +107,158 @@ async fn main() {
             public_base_url: config.app_public_base_url.clone(),
         },
     );
+    let shutdown_rx_email = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        worker.run(shutdown_rx_email).await;
+    });
 
-    let jwt_signer = match identity::infra::jwt::JwtSigner::from_pem(
-        &config.jwt_signing_key_pem,
-        config.jwt_kid.clone(),
+    let purge = PurgeWorker::new(pool.clone());
+    let shutdown_rx_purge = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        purge.run(shutdown_rx_purge).await;
+    });
+
+    let reconcile = KeyReconcileWorker::new(pool.clone());
+    let shutdown_rx_reconcile = shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        reconcile.run(shutdown_rx_reconcile).await;
+    });
+
+    let bootstrap_state_config = config.clone();
+    let encryptor = match KeyEncryptor::new(&config.jwt_key_encryption_key) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid JWT_KEY_ENCRYPTION_KEY");
+            std::process::exit(1);
+        }
+    };
+
+    let temp_state_for_keys = AppState::new(
+        bootstrap_state_config.clone(),
+        pool.clone(),
+        redis.clone(),
+        password_policy.clone(),
+        signer.clone(),
+        JwtSigner::from_pem(
+            "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAAAAAAAAAAAKEHYiH0p4EXAMPLE\n-----END PRIVATE KEY-----",
+            "bootstrap".into(),
+            config.jwt_issuer.clone(),
+            config.jwt_audience.clone(),
+            config.jwt_access_ttl_secs,
+        )
+        .unwrap_or_else(|_| {
+            tracing::error!("bootstrap placeholder signer failed");
+            std::process::exit(1);
+        }),
+        JwtVerifier::new(config.jwt_issuer.clone(), config.jwt_audience.clone()),
+    );
+
+    let active_row = match ensure_active_key(&temp_state_for_keys).await {
+        Ok(r) => r,
+        Err(e) => {
+            if !config.jwt_signing_key_pem.is_empty() {
+                tracing::warn!(
+                    error = %e,
+                    "DB key bootstrap failed, falling back to JWT_SIGNING_KEY_PEM"
+                );
+                let jwt_signer = match JwtSigner::from_pem(
+                    &config.jwt_signing_key_pem,
+                    config.jwt_kid.clone(),
+                    config.jwt_issuer.clone(),
+                    config.jwt_audience.clone(),
+                    config.jwt_access_ttl_secs,
+                ) {
+                    Ok(s) => s,
+                    Err(e2) => {
+                        tracing::error!(error = %e2, "invalid JWT_SIGNING_KEY_PEM");
+                        std::process::exit(1);
+                    }
+                };
+                let jwt_verifier =
+                    JwtVerifier::new(config.jwt_issuer.clone(), config.jwt_audience.clone());
+                if let Ok(pub_pem) = public_pem_from_private_pem(&config.jwt_signing_key_pem) {
+                    let _ = jwt_verifier
+                        .insert_key(config.jwt_kid.clone(), &pub_pem)
+                        .await;
+                }
+                let state = AppState::new(
+                    config,
+                    pool,
+                    redis,
+                    password_policy,
+                    signer,
+                    jwt_signer,
+                    jwt_verifier,
+                );
+                run_server(state, shutdown_tx).await;
+                return;
+            }
+            tracing::error!(error = %e, "failed to ensure active signing key");
+            std::process::exit(1);
+        }
+    };
+
+    let private_pem = match decrypt_private_pem(&encryptor, &active_row) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to decrypt active signing key");
+            std::process::exit(1);
+        }
+    };
+
+    let jwt_signer = match JwtSigner::from_pem(
+        &private_pem,
+        active_row.kid.clone(),
         config.jwt_issuer.clone(),
         config.jwt_audience.clone(),
         config.jwt_access_ttl_secs,
     ) {
         Ok(s) => s,
         Err(e) => {
-            tracing::error!(error = %e, "invalid JWT signing configuration");
+            tracing::error!(error = %e, "failed to build JwtSigner from active key");
             std::process::exit(1);
         }
     };
 
-    let purge = identity::jobs::purge_accounts::PurgeWorker::new(pool.clone());
-    let shutdown_rx2 = shutdown_tx.subscribe();
+    let jwt_verifier = JwtVerifier::new(config.jwt_issuer.clone(), config.jwt_audience.clone());
 
-    tokio::spawn(async move {
-        worker.run(shutdown_rx).await;
-    });
-    tokio::spawn(async move {
-        purge.run(shutdown_rx2).await;
-    });
+    match JwksRepo::list_publishable(&pool).await {
+        Ok(keys) => {
+            for row in keys {
+                if let Ok(pub_pem) = jwk_to_public_pem(&row.public_jwk) {
+                    if let Err(e) = jwt_verifier.insert_key(row.kid.clone(), &pub_pem).await {
+                        tracing::warn!(error = %e, kid = %row.kid, "skip loading verify key");
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to load publishable keys into verifier");
+            std::process::exit(1);
+        }
+    }
 
-    let addr = config.bind_addr;
-    let state = AppState::new(config, pool, redis, password_policy, signer, jwt_signer);
+    if let Ok(pub_pem) = public_pem_from_private_pem(&private_pem) {
+        let _ = jwt_verifier
+            .insert_key(active_row.kid.clone(), &pub_pem)
+            .await;
+    }
+
+    let state = AppState::new(
+        config,
+        pool,
+        redis,
+        password_policy,
+        signer,
+        jwt_signer,
+        jwt_verifier,
+    );
+
+    run_server(state, shutdown_tx).await;
+}
+
+async fn run_server(state: AppState, shutdown_tx: watch::Sender<bool>) {
+    let addr = state.config.bind_addr;
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {
@@ -180,4 +310,26 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("shutdown signal received");
+}
+
+fn jwk_to_public_pem(jwk: &serde_json::Value) -> Result<String, ()> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use p256::pkcs8::EncodePublicKey;
+    use p256::PublicKey;
+
+    let x_b64 = jwk.get("x").and_then(|v| v.as_str()).ok_or(())?;
+    let y_b64 = jwk.get("y").and_then(|v| v.as_str()).ok_or(())?;
+    let x = URL_SAFE_NO_PAD.decode(x_b64).map_err(|_| ())?;
+    let y = URL_SAFE_NO_PAD.decode(y_b64).map_err(|_| ())?;
+    if x.len() != 32 || y.len() != 32 {
+        return Err(());
+    }
+    let mut uncompressed = vec![0x04];
+    uncompressed.extend_from_slice(&x);
+    uncompressed.extend_from_slice(&y);
+    let public = PublicKey::from_sec1_bytes(&uncompressed).map_err(|_| ())?;
+    public
+        .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+        .map_err(|_| ())
 }
