@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,15 +29,6 @@ async fn main() {
             std::process::exit(1);
         }
     };
-
-    if let Err(e) = PasswordPolicy::new(
-        config.argon2_memory_kib,
-        config.argon2_iterations,
-        config.argon2_parallelism,
-    ) {
-        tracing::error!(error = %e, "invalid argon2 configuration");
-        std::process::exit(1);
-    }
 
     let hmac_keys = match parse_hmac_keys(&config.magic_link_hmac_keys) {
         Ok(k) => k,
@@ -75,6 +67,18 @@ async fn main() {
         }
     };
 
+    let password_policy = match PasswordPolicy::new(
+        config.argon2_memory_kib,
+        config.argon2_iterations,
+        config.argon2_parallelism,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid argon2 configuration");
+            std::process::exit(1);
+        }
+    };
+
     let mailer: Arc<dyn Mailer> = match config.mail_provider.as_str() {
         "console" => Arc::new(ConsoleMailer {
             from: config.mail_from.clone(),
@@ -102,7 +106,7 @@ async fn main() {
     });
 
     let addr = config.bind_addr;
-    let state = AppState::new(config, pool, redis);
+    let state = AppState::new(config, pool, redis, password_policy);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {
@@ -115,7 +119,11 @@ async fn main() {
 
     tracing::info!(%addr, "identity service listening");
 
-    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+    let server = axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
         shutdown_signal().await;
         let _ = shutdown_tx.send(true);
     });
