@@ -3,6 +3,7 @@ pub mod config;
 pub mod error;
 pub mod infra;
 pub mod jobs;
+pub mod middleware;
 pub mod modules;
 pub mod state;
 
