@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     paths:
       - "services/identity/**"
       - ".github/workflows/**"
@@ -74,63 +74,46 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Detect identity service
-        id: detect
+      - name: Require identity service manifest
         shell: bash
-        run: |
-          if [ -s services/identity/Cargo.toml ]; then
-            echo "has_manifest=true" >> "$GITHUB_OUTPUT"
-            echo "Identity Cargo.toml found; running Rust checks."
-          else
-            echo "has_manifest=false" >> "$GITHUB_OUTPUT"
-            echo "Rust checks skipped: services/identity/Cargo.toml does not exist yet."
-          fi
+        run: test -s services/identity/Cargo.toml
       - name: Install stable Rust
-        if: steps.detect.outputs.has_manifest == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - name: Cache Rust artifacts
-        if: steps.detect.outputs.has_manifest == 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: services/identity -> target
       - name: Verify lockfile
-        if: steps.detect.outputs.has_manifest == 'true'
         shell: bash
         working-directory: services/identity
         run: test -s Cargo.lock
       - name: Format
-        if: steps.detect.outputs.has_manifest == 'true'
         working-directory: services/identity
         run: cargo fmt --all -- --check
       - name: Clippy
-        if: steps.detect.outputs.has_manifest == 'true'
         working-directory: services/identity
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Check SQLx offline build
-        if: steps.detect.outputs.has_manifest == 'true'
+      - name: Check locked build
         env:
           SQLX_OFFLINE: "true"
         working-directory: services/identity
         run: cargo check --locked --all-targets
       - name: Test
-        if: steps.detect.outputs.has_manifest == 'true'
         env:
+          CI: "true"
           SQLX_OFFLINE: "true"
           DATABASE_URL_TEST: postgres://bekratos:bekratos@localhost:5432/bekratos_test
           REDIS_URL_TEST: redis://localhost:6379
         working-directory: services/identity
         run: cargo test --locked --all-targets
       - name: Install cargo-audit
-        if: steps.detect.outputs.has_manifest == 'true'
         uses: taiki-e/install-action@cargo-audit
       - name: Audit dependencies
-        if: steps.detect.outputs.has_manifest == 'true'
         working-directory: services/identity
         run: cargo audit --deny warnings
       - name: Build container image
-        if: steps.detect.outputs.has_manifest == 'true'
         uses: docker/build-push-action@v6
         with:
           context: services/identity

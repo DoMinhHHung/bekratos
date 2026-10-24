@@ -20,10 +20,25 @@ pub fn load_test_env() {
     }
 }
 
-pub fn test_database_url() -> Option<String> {
+fn require_or_skip(name: &str) -> Option<String> {
     load_test_env();
+    match env::var(name) {
+        Ok(v) if !v.is_empty() => Some(v),
+        _ => {
+            if env::var("CI").ok().as_deref() == Some("true") {
+                panic!("{name} must be set when CI=true");
+            }
+            None
+        }
+    }
+}
 
-    env::var("DATABASE_URL_TEST").ok().filter(|u| !u.is_empty())
+pub fn test_database_url() -> Option<String> {
+    require_or_skip("DATABASE_URL_TEST")
+}
+
+pub fn test_redis_url() -> Option<String> {
+    require_or_skip("REDIS_URL_TEST")
 }
 
 pub async fn test_pool() -> Option<PgPool> {

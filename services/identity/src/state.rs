@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use redis::aio::ConnectionManager;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 
 use crate::config::Config;
 use crate::infra::jwt::{JwtSigner, JwtVerifier};
@@ -19,6 +20,7 @@ pub struct AppState {
     pub magic_link_signer: MagicLinkSigner,
     pub jwt_signer: JwtSigner,
     pub jwt_verifier: JwtVerifier,
+    pub argon_permits: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -32,6 +34,7 @@ impl AppState {
         jwt_verifier: JwtVerifier,
     ) -> Self {
         let rate_limiter = RateLimiter::new(redis.clone());
+        let argon_permits = Arc::new(Semaphore::new(config.argon2_max_concurrent));
         Self {
             config: Arc::new(config),
             db,
@@ -41,6 +44,7 @@ impl AppState {
             magic_link_signer,
             jwt_signer,
             jwt_verifier,
+            argon_permits,
         }
     }
 }

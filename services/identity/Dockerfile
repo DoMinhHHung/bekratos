@@ -1,9 +1,21 @@
 FROM rust:1.89-bookworm AS builder
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src \
+    && echo 'fn main() {}' > src/main.rs \
+    && echo 'pub fn placeholder() {}' > src/lib.rs \
+    && cargo build --release --locked \
+    && rm -rf src
+
 COPY src ./src
 COPY migrations ./migrations
-RUN cargo build --release --locked
+RUN touch src/main.rs src/lib.rs \
+    && cargo build --release --locked
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

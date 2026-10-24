@@ -10,17 +10,13 @@ pub struct KeyEncryptor {
 
 impl KeyEncryptor {
     pub fn new(kek: &str) -> AppResult<Self> {
+        use sha2::Digest;
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"bekratos-identity-kek-v1");
+        hasher.update(kek.as_bytes());
+        let dig = hasher.finalize();
         let mut key_bytes = [0u8; 32];
-        let src = kek.as_bytes();
-        let len = src.len().min(32);
-        key_bytes[..len].copy_from_slice(&src[..len]);
-        if len < 32 {
-            let mut hasher = sha2::Sha256::new();
-            use sha2::Digest;
-            hasher.update(src);
-            let dig = hasher.finalize();
-            key_bytes.copy_from_slice(&dig);
-        }
+        key_bytes.copy_from_slice(&dig);
         let key = Key::from_slice(&key_bytes);
         Ok(Self {
             cipher: XChaCha20Poly1305::new(key),
