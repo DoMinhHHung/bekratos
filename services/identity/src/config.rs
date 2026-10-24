@@ -15,6 +15,14 @@ pub struct Config {
     pub body_limit_bytes: usize,
     pub readiness_require_db: bool,
     pub readiness_require_redis: bool,
+    pub magic_link_hmac_keys: String,
+    pub magic_link_active_kid: String,
+    pub app_public_base_url: String,
+    pub mail_provider: String,
+    pub mail_from: String,
+    pub argon2_memory_kib: u32,
+    pub argon2_iterations: u32,
+    pub argon2_parallelism: u32,
 }
 
 impl Config {
@@ -62,6 +70,31 @@ impl Config {
         let readiness_require_db = parse_bool_env("READINESS_REQUIRE_DB", true)?;
         let readiness_require_redis = parse_bool_env("READINESS_REQUIRE_REDIS", true)?;
 
+        let magic_link_hmac_keys = env::var("MAGIC_LINK_HMAC_KEYS")
+            .map_err(|_| AppError::config("MAGIC_LINK_HMAC_KEYS is required"))?;
+        let magic_link_active_kid = env::var("MAGIC_LINK_ACTIVE_KID")
+            .map_err(|_| AppError::config("MAGIC_LINK_ACTIVE_KID is required"))?;
+        let app_public_base_url = env::var("APP_PUBLIC_BASE_URL")
+            .map_err(|_| AppError::config("APP_PUBLIC_BASE_URL is required"))?;
+        if app_public_base_url.is_empty() {
+            return Err(AppError::config("APP_PUBLIC_BASE_URL must not be empty"));
+        }
+        let mail_provider = env::var("MAIL_PROVIDER").unwrap_or_else(|_| "console".to_string());
+        let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
+
+        let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
+            .unwrap_or_else(|_| "19456".to_string())
+            .parse()
+            .map_err(|_| AppError::config("ARGON2_MEMORY_KIB must be u32"))?;
+        let argon2_iterations: u32 = env::var("ARGON2_ITERATIONS")
+            .unwrap_or_else(|_| "2".to_string())
+            .parse()
+            .map_err(|_| AppError::config("ARGON2_ITERATIONS must be u32"))?;
+        let argon2_parallelism: u32 = env::var("ARGON2_PARALLELISM")
+            .unwrap_or_else(|_| "1".to_string())
+            .parse()
+            .map_err(|_| AppError::config("ARGON2_PARALLELISM must be u32"))?;
+
         Ok(Self {
             host,
             port,
@@ -72,6 +105,14 @@ impl Config {
             body_limit_bytes,
             readiness_require_db,
             readiness_require_redis,
+            magic_link_hmac_keys,
+            magic_link_active_kid,
+            app_public_base_url,
+            mail_provider,
+            mail_from,
+            argon2_memory_kib,
+            argon2_iterations,
+            argon2_parallelism,
         })
     }
 }
