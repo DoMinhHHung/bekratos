@@ -1,8 +1,14 @@
-use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
 
 use identity::infra::db;
+use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
+use identity::infra::password::PasswordPolicy;
+use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
+use identity::jobs::email_worker::{EmailWorker, EmailWorkerConfig};
 use identity::{build_router, AppState, Config};
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -22,6 +28,31 @@ async fn main() {
         }
     };
 
+    if let Err(e) = PasswordPolicy::new(
+        config.argon2_memory_kib,
+        config.argon2_iterations,
+        config.argon2_parallelism,
+    ) {
+        tracing::error!(error = %e, "invalid argon2 configuration");
+        std::process::exit(1);
+    }
+
+    let hmac_keys = match parse_hmac_keys(&config.magic_link_hmac_keys) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid MAGIC_LINK_HMAC_KEYS");
+            std::process::exit(1);
+        }
+    };
+
+    let signer = match MagicLinkSigner::new(hmac_keys, config.magic_link_active_kid.clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid magic link signer config");
+            std::process::exit(1);
+        }
+    };
+
     let pool = match db::connect(&config.database_url).await {
         Ok(p) => p,
         Err(e) => {
@@ -35,7 +66,33 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let addr: SocketAddr = config.bind_addr;
+    let mailer: Arc<dyn Mailer> = match config.mail_provider.as_str() {
+        "console" => Arc::new(ConsoleMailer {
+            from: config.mail_from.clone(),
+        }),
+        _ => Arc::new(NoopMailer),
+    };
+
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let worker = EmailWorker::new(
+        pool.clone(),
+        mailer,
+        signer,
+        EmailWorkerConfig {
+            poll_interval: Duration::from_secs(5),
+            batch_size: 20,
+            lease_secs: 60,
+            max_attempts: 8,
+            public_base_url: config.app_public_base_url.clone(),
+        },
+    );
+
+    tokio::spawn(async move {
+        worker.run(shutdown_rx).await;
+    });
+
+    let addr = config.bind_addr;
     let state = AppState::new(config, pool);
     let app = build_router(state);
 
@@ -49,7 +106,10 @@ async fn main() {
 
     tracing::info!(%addr, "identity service listening");
 
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+    let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
 
     if let Err(e) = server.await {
         tracing::error!(error = %e, "server error");

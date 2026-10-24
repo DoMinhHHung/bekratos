@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod error;
 pub mod infra;
+pub mod jobs;
 pub mod modules;
 pub mod state;
 

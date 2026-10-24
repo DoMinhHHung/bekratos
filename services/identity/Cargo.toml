@@ -12,6 +12,7 @@ tokio = { version = "1", features = [
     "macros",
     "signal",
     "net",
+    "time",
 ] }
 tower = "0.5"
 tower-http = { version = "0.5", features = ["trace", "timeout", "limit"] }
@@ -32,6 +33,15 @@ sqlx = { version = "0.8", features = [
     "migrate",
     "macros",
 ] }
+argon2 = "0.5"
+password-hash = "0.5"
+hmac = "0.12"
+sha2 = "0.10"
+subtle = "2"
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
