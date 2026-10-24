@@ -1,0 +1,49 @@
+# --- Rust / Cargo ---
+target/
+**/*.rs.bk
+*.pdb
+
+# --- Environment & Secrets (Security-First) ---
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.der
+*.crt
+*.cer
+*.jwk
+*.jwks
+
+# --- Local Database & Docker Volumes ---
+pgdata/
+postgres-data/
+redis-data/
+dump.rdb
+*.sql.gz
+*.dump
+
+# --- Test, Coverage & Profiling ---
+lcov.info
+coverage/
+profraw/
+*.profraw
+*.profdata
+flamegraph.svg
+
+# --- Logs & Crash Dumps ---
+*.log
+npm-debug.log*
+core
+
+# --- OS & Editors ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
