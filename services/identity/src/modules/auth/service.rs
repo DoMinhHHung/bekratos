@@ -20,6 +20,7 @@ const POLICY_TERMS_SHA256: &str =
 const POLICY_PRIVACY_SHA256: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const EMAIL_VERIFY_TTL_HOURS: i64 = 24;
+const NEUTRAL_RESEND_MSG: &str = "If an account is pending verification, a new email will be sent.";
 
 fn username_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -222,4 +223,52 @@ fn hash_document(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+pub async fn resend_verification(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
+    let email = normalize_email(email_raw);
+
+    state
+        .rate_limiter
+        .check_and_incr("resend_verification", "ip", ip, 10, 3600)
+        .await?;
+    state
+        .rate_limiter
+        .check_and_incr("resend_verification", "email", &email, 3, 3600)
+        .await?;
+
+    let user_repo = UserRepo::new(&state.db);
+    let Some((user, email_row)) = user_repo.find_by_email(&email).await? else {
+        return Ok(NEUTRAL_RESEND_MSG.to_string());
+    };
+
+    if user.status != "pending" {
+        return Ok(NEUTRAL_RESEND_MSG.to_string());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin resend-verification transaction failed");
+        AppError::Internal
+    })?;
+
+    TokenRepo::revoke_active_for_user_purpose_tx(&mut tx, user.id, "email_verify").await?;
+
+    let token_id = Uuid::now_v7();
+    let expires_at = Utc::now() + ChronoDuration::hours(EMAIL_VERIFY_TTL_HOURS);
+    TokenRepo::insert_tx(
+        &mut tx,
+        token_id,
+        user.id,
+        "email_verify",
+        &email_row.email,
+        expires_at,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit resend-verification failed");
+        AppError::Internal
+    })?;
+
+    Ok(NEUTRAL_RESEND_MSG.to_string())
 }

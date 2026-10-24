@@ -5,7 +5,10 @@ use axum::routing::post;
 use axum::{Json, Router};
 use validator::Validate;
 
-use super::dto::{RegisterRequest, RegisterResponse, VerifyEmailRequest, VerifyEmailResponse};
+use super::dto::{
+    RegisterRequest, RegisterResponse, ResendVerificationRequest, ResendVerificationResponse,
+    VerifyEmailRequest, VerifyEmailResponse,
+};
 use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -14,6 +17,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/auth/register", post(register))
         .route("/v1/auth/verify-email", post(verify_email))
+        .route("/v1/auth/resend-verification", post(resend_verification))
 }
 
 fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
@@ -43,4 +47,16 @@ async fn verify_email(
     let ip = client_ip(addr);
     let message = service::verify_email(&state, &ip, &body.token).await?;
     Ok(Json(VerifyEmailResponse { message }))
+}
+
+async fn resend_verification(
+    State(state): State<AppState>,
+    addr: Option<ConnectInfo<SocketAddr>>,
+    Json(body): Json<ResendVerificationRequest>,
+) -> Result<Json<ResendVerificationResponse>, AppError> {
+    body.validate()
+        .map_err(|_| AppError::BadRequest("invalid request".into()))?;
+    let ip = client_ip(addr);
+    let message = service::resend_verification(&state, &ip, &body.email).await?;
+    Ok(Json(ResendVerificationResponse { message }))
 }
