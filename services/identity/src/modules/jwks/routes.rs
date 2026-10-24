@@ -11,7 +11,13 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/jwks", get(jwks))
 }
 
-async fn jwks(State(state): State<AppState>) -> Result<Json<JsonValue>, AppError> {
+#[utoipa::path(
+    get,
+    path = "/v1/jwks",
+    responses((status = 200, description = "Public signing keys", body = crate::openapi::JwksDocument)),
+    tag = "JWKS"
+)]
+pub(crate) async fn jwks(State(state): State<AppState>) -> Result<Json<JsonValue>, AppError> {
     let body = service::get_jwks(&state).await?;
     Ok(Json(body))
 }

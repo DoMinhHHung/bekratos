@@ -5,6 +5,7 @@ pub mod infra;
 pub mod jobs;
 pub mod middleware;
 pub mod modules;
+pub mod openapi;
 pub mod state;
 
 pub use app::build_router;

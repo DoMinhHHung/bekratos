@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 
-use axum::extract::ConnectInfo;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::HeaderMap;
 use axum::routing::{delete, get};
 use axum::{Json, Router};
@@ -33,12 +32,22 @@ pub fn router() -> Router<AppState> {
         .route("/v1/me/delete", delete(delete_account))
 }
 
-fn client_ip(addr: Option<ConnectInfo<SocketAddr>>) -> String {
-    addr.map(|a| a.0.ip().to_string())
+fn client_ip(addr: Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
+    addr.map(|Extension(ConnectInfo(peer))| peer.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-async fn get_profile(
+#[utoipa::path(
+    get,
+    path = "/v1/me",
+    responses(
+        (status = 200, description = "Current user profile", body = ProfileResponse),
+        (status = 401, description = "Invalid access token")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Users"
+)]
+pub(crate) async fn get_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ProfileResponse>, AppError> {
@@ -47,7 +56,19 @@ async fn get_profile(
     Ok(Json(profile))
 }
 
-async fn update_profile(
+#[utoipa::path(
+    patch,
+    path = "/v1/me",
+    request_body = UpdateProfileRequest,
+    responses(
+        (status = 200, description = "Updated user profile", body = ProfileResponse),
+        (status = 400, description = "Invalid request"),
+        (status = 401, description = "Invalid access token")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Users"
+)]
+pub(crate) async fn update_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<UpdateProfileRequest>,
@@ -59,7 +80,17 @@ async fn update_profile(
     Ok(Json(profile))
 }
 
-async fn list_sessions(
+#[utoipa::path(
+    get,
+    path = "/v1/me/sessions",
+    responses(
+        (status = 200, description = "Active sessions", body = SessionListResponse),
+        (status = 401, description = "Invalid access token")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Sessions"
+)]
+pub(crate) async fn list_sessions(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<SessionListResponse>, AppError> {
@@ -68,7 +99,19 @@ async fn list_sessions(
     Ok(Json(list))
 }
 
-async fn revoke_one(
+#[utoipa::path(
+    delete,
+    path = "/v1/me/sessions/{id}",
+    params(("id" = Uuid, Path, description = "Session identifier")),
+    responses(
+        (status = 200, description = "Session revoked", body = MessageResponse),
+        (status = 401, description = "Invalid access token"),
+        (status = 404, description = "Session not found")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Sessions"
+)]
+pub(crate) async fn revoke_one(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<Uuid>,
@@ -78,7 +121,17 @@ async fn revoke_one(
     Ok(Json(MessageResponse { message }))
 }
 
-async fn revoke_others(
+#[utoipa::path(
+    delete,
+    path = "/v1/me/sessions",
+    responses(
+        (status = 200, description = "Other sessions revoked", body = MessageResponse),
+        (status = 401, description = "Invalid access token")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Sessions"
+)]
+pub(crate) async fn revoke_others(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<MessageResponse>, AppError> {
@@ -87,9 +140,20 @@ async fn revoke_others(
     Ok(Json(MessageResponse { message }))
 }
 
-async fn delete_account(
+#[utoipa::path(
+    delete,
+    path = "/v1/me/delete",
+    responses(
+        (status = 200, description = "Account deletion scheduled", body = MessageResponse),
+        (status = 401, description = "Invalid access token"),
+        (status = 429, description = "Rate limit exceeded")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Users"
+)]
+pub(crate) async fn delete_account(
     State(state): State<AppState>,
-    addr: Option<ConnectInfo<SocketAddr>>,
+    addr: Option<Extension<ConnectInfo<SocketAddr>>>,
     headers: HeaderMap,
 ) -> Result<Json<MessageResponse>, AppError> {
     let token = extract_bearer(&headers)?;
@@ -101,13 +165,13 @@ async fn delete_account(
 #[cfg(test)]
 mod tests {
     use super::client_ip;
-    use axum::extract::ConnectInfo;
+    use axum::extract::{ConnectInfo, Extension};
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
     #[test]
     fn client_ip_uses_only_the_connection_peer() {
         let peer = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8080);
-        assert_eq!(client_ip(Some(ConnectInfo(peer))), "::1");
+        assert_eq!(client_ip(Some(Extension(ConnectInfo(peer)))), "::1");
         assert_eq!(client_ip(None), "unknown");
     }
 }

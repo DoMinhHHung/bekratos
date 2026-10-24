@@ -27,6 +27,7 @@
 ## Health, logs, and incident response
 
 - `/healthz` reports process liveness. `/readyz` checks PostgreSQL and Redis according to `READINESS_REQUIRE_DB` and `READINESS_REQUIRE_REDIS`.
+- `/swagger-ui/` serves interactive API documentation and `/api-docs/openapi.json` serves the OpenAPI document. Restrict these routes at the ingress or disable them for deployments where public API documentation is not appropriate.
 - Use structured logs and monitor startup failures, database/Redis errors, failed email delivery, purge activity, key reconciliation, repeated authentication failures, and elevated `401`/`429` responses.
 - Treat request IP and user-agent data as sensitive operational data. Apply access controls and retention limits to logs and audit records.
 - For a suspected signing-key exposure, stop issuing tokens with the affected key, create and activate a replacement through the authorized operator procedure, publish the new JWKS, revoke sessions as required, and remove the compromised key only after verifiers have migrated.
