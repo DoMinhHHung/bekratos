@@ -31,8 +31,8 @@ impl Config {
             .parse()
             .map_err(|_| AppError::config("HOST:PORT is not a valid socket address"))?;
 
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| AppError::config("DATABASE_URL is required"))?;
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| AppError::config("DATABASE_URL is required"))?;
         if database_url.is_empty() {
             return Err(AppError::config("DATABASE_URL must not be empty"));
         }

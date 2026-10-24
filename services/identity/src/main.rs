@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
-use identity::{build_router, Config, AppState};
+use identity::infra::db;
+use identity::{build_router, AppState, Config};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -21,8 +22,21 @@ async fn main() {
         }
     };
 
+    let pool = match db::connect(&config.database_url).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to connect to database");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = db::migrate(&pool).await {
+        tracing::error!(error = %e, "failed to run migrations");
+        std::process::exit(1);
+    }
+
     let addr: SocketAddr = config.bind_addr;
-    let state = AppState::new(config);
+    let state = AppState::new(config, pool);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {

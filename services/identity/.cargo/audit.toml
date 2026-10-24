@@ -1,0 +1,11 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack (timing sidechannel) on `rsa` crate.
+    # No fixed upgrade available upstream.
+    # Transitive dependency (sqlx ecosystem / cargo tree); not used for RSA
+    # private-key operations on untrusted input in this service.
+    # Access tokens are ES256; passwords are Argon2id.
+    # Track: https://rustsec.org/advisories/RUSTSEC-2023-0071
+    # Revisit when rsa or dependents ship a constant-time fix.
+    "RUSTSEC-2023-0071",
+]

@@ -50,3 +50,5 @@ Thumbs.db
 
 # --- Tooling (do not ignore migrations/ or .sqlx/) ---
 .cargo/
+!services/identity/.cargo/
+!services/identity/.cargo/audit.toml
