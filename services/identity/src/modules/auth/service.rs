@@ -24,6 +24,10 @@ const POLICY_PRIVACY_SHA256: &str =
     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 const EMAIL_VERIFY_TTL_HOURS: i64 = 24;
 const NEUTRAL_RESEND_MSG: &str = "If an account is pending verification, a new email will be sent.";
+const NEUTRAL_FORGOT_MSG: &str =
+    "If an account with that email exists, a password reset link will be sent.";
+const PASSWORD_RESET_TTL_HOURS: i64 = 1;
+const PASSWORD_HISTORY_LIMIT: i64 = 5;
 
 fn username_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -620,4 +624,245 @@ pub async fn refresh(
         token_type: "Bearer".to_string(),
         expires_in: state.jwt_signer.access_ttl_secs(),
     })
+}
+
+pub async fn forgot_password(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
+    let email = normalize_email(email_raw);
+
+    state
+        .rate_limiter
+        .check_and_incr("forgot_password", "ip", ip, 10, 3600)
+        .await?;
+    state
+        .rate_limiter
+        .check_and_incr("forgot_password", "email", &email, 3, 3600)
+        .await?;
+
+    let user_repo = UserRepo::new(&state.db);
+    let Some((user, email_row)) = user_repo.find_by_email(&email).await? else {
+        return Ok(NEUTRAL_FORGOT_MSG.to_string());
+    };
+
+    if user.status != "active" {
+        return Ok(NEUTRAL_FORGOT_MSG.to_string());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin forgot-password transaction failed");
+        AppError::Internal
+    })?;
+
+    TokenRepo::revoke_active_for_user_purpose_tx(&mut tx, user.id, "password_reset").await?;
+
+    let token_id = Uuid::now_v7();
+    let expires_at = Utc::now() + ChronoDuration::hours(PASSWORD_RESET_TTL_HOURS);
+    TokenRepo::insert_tx(
+        &mut tx,
+        token_id,
+        user.id,
+        "password_reset",
+        &email_row.email,
+        expires_at,
+    )
+    .await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "password_reset_requested",
+        Some(user.id),
+        None,
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit forgot-password failed");
+        AppError::Internal
+    })?;
+
+    Ok(NEUTRAL_FORGOT_MSG.to_string())
+}
+
+pub async fn reset_password(
+    state: &AppState,
+    ip: &str,
+    token: &str,
+    new_password: &str,
+) -> AppResult<String> {
+    state
+        .rate_limiter
+        .check_and_incr("reset_password", "ip", ip, 20, 900)
+        .await?;
+
+    let token_id = state
+        .magic_link_signer
+        .verify("password_reset", token)
+        .map_err(|_| AppError::BadRequest("invalid token".into()))?;
+
+    let password = new_password.to_string();
+    let policy = state.password_policy.clone();
+    let new_hash = tokio::task::spawn_blocking(move || policy.hash(&password))
+        .await
+        .map_err(|_| AppError::Internal)??;
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin reset-password transaction failed");
+        AppError::Internal
+    })?;
+
+    let consumed = TokenRepo::consume_tx(&mut tx, token_id, "password_reset")
+        .await?
+        .ok_or_else(|| AppError::BadRequest("invalid token".into()))?;
+
+    let recent =
+        CredentialRepo::list_recent_hashes_tx(&mut tx, consumed.user_id, PASSWORD_HISTORY_LIMIT)
+            .await?;
+
+    let policy_check = state.password_policy.clone();
+    let new_password_owned = new_password.to_string();
+    let reused = tokio::task::spawn_blocking(move || {
+        for h in &recent {
+            if policy_check.verify(&new_password_owned, h).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .map_err(|_| AppError::Internal)?;
+
+    if reused {
+        let _ = tx.rollback().await;
+        return Err(AppError::BadRequest("password was used recently".into()));
+    }
+
+    CredentialRepo::update_password_tx(&mut tx, consumed.user_id, &new_hash).await?;
+
+    let history_id = Uuid::now_v7();
+    CredentialRepo::insert_history_tx(&mut tx, history_id, consumed.user_id, &new_hash).await?;
+    CredentialRepo::trim_history_tx(&mut tx, consumed.user_id, PASSWORD_HISTORY_LIMIT).await?;
+
+    SessionRepo::revoke_all_for_user_tx(&mut tx, consumed.user_id, "password_reset", None).await?;
+    RefreshTokenRepo::revoke_all_for_user_tx(&mut tx, consumed.user_id, None).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "password_reset_completed",
+        Some(consumed.user_id),
+        None,
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit reset-password failed");
+        AppError::Internal
+    })?;
+
+    Ok("Password has been reset.".to_string())
+}
+
+pub async fn change_password(
+    state: &AppState,
+    access_token: &str,
+    ip: &str,
+    current_password: &str,
+    new_password: &str,
+) -> AppResult<String> {
+    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+
+    if current_password == new_password {
+        return Err(AppError::BadRequest(
+            "new password must differ from current password".into(),
+        ));
+    }
+
+    let current = current_password.to_string();
+    let new_pw = new_password.to_string();
+    let policy = state.password_policy.clone();
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin change-password transaction failed");
+        AppError::Internal
+    })?;
+
+    let session = SessionRepo::find_by_id_for_update_tx(&mut tx, session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    if session.user_id != user_id || session.revoked_at.is_some() {
+        let _ = tx.rollback().await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let current_hash = CredentialRepo::find_password_hash_tx(&mut tx, user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    let policy_v = policy.clone();
+    let current_ok = tokio::task::spawn_blocking(move || policy_v.verify(&current, &current_hash))
+        .await
+        .map_err(|_| AppError::Internal)??;
+
+    if !current_ok {
+        let _ = tx.rollback().await;
+        dummy_verify();
+        return Err(AppError::Unauthorized);
+    }
+
+    let recent =
+        CredentialRepo::list_recent_hashes_tx(&mut tx, user_id, PASSWORD_HISTORY_LIMIT).await?;
+
+    let policy_h = policy.clone();
+    let new_pw_check = new_pw.clone();
+    let reused = tokio::task::spawn_blocking(move || {
+        for h in &recent {
+            if policy_h.verify(&new_pw_check, h).unwrap_or(false) {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .map_err(|_| AppError::Internal)?;
+
+    if reused {
+        let _ = tx.rollback().await;
+        return Err(AppError::BadRequest("password was used recently".into()));
+    }
+
+    let new_hash = tokio::task::spawn_blocking(move || policy.hash(&new_pw))
+        .await
+        .map_err(|_| AppError::Internal)??;
+
+    CredentialRepo::update_password_tx(&mut tx, user_id, &new_hash).await?;
+
+    let history_id = Uuid::now_v7();
+    CredentialRepo::insert_history_tx(&mut tx, history_id, user_id, &new_hash).await?;
+    CredentialRepo::trim_history_tx(&mut tx, user_id, PASSWORD_HISTORY_LIMIT).await?;
+
+    SessionRepo::revoke_all_for_user_tx(&mut tx, user_id, "password_change", Some(session_id))
+        .await?;
+    RefreshTokenRepo::revoke_all_for_user_tx(&mut tx, user_id, Some(session_id)).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "password_changed",
+        Some(user_id),
+        Some(session_id),
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit change-password failed");
+        AppError::Internal
+    })?;
+
+    Ok("Password has been changed.".to_string())
 }

@@ -77,3 +77,40 @@ pub struct RefreshResponse {
     pub token_type: String,
     pub expires_in: i64,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ForgotPasswordRequest {
+    #[validate(email(message = "invalid email"))]
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForgotPasswordResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ResetPasswordRequest {
+    #[validate(length(min = 10, max = 512, message = "invalid token"))]
+    pub token: String,
+    #[validate(length(min = 8, max = 128, message = "invalid password"))]
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResetPasswordResponse {
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ChangePasswordRequest {
+    #[validate(length(min = 8, max = 128, message = "invalid password"))]
+    pub current_password: String,
+    #[validate(length(min = 8, max = 128, message = "invalid password"))]
+    pub new_password: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChangePasswordResponse {
+    pub message: String,
+}
