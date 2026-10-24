@@ -20,6 +20,10 @@ pub struct MagicLinkSigner {
 }
 
 impl MagicLinkSigner {
+    /// Tạo bộ ký magic link với khóa đang dùng được chọn bằng `active_kid`.
+    ///
+    /// Trả `Config` nếu danh sách rỗng, không tìm thấy khóa đang dùng hoặc bất kỳ
+    /// khóa bí mật nào ngắn hơn 32 byte.
     pub fn new(keys: Vec<HmacKey>, active_kid: String) -> AppResult<Self> {
         if keys.is_empty() {
             return Err(AppError::config("MAGIC_LINK_HMAC_KEYS must not be empty"));
@@ -67,6 +71,10 @@ impl MagicLinkSigner {
         Ok(hex::encode(result))
     }
 
+    /// Ký định danh token cho đúng `purpose`, trả chuỗi `kid.uuid.mac` với MAC hex.
+    ///
+    /// Hàm chỉ tạo chữ ký; thời hạn và trạng thái sử dụng do bên gọi quản lý.
+    /// Lỗi khởi tạo HMAC được trả dưới dạng `Internal`.
     pub fn issue(&self, purpose: &str, token_id: Uuid) -> AppResult<String> {
         let key = self.active_key();
         let msg = Self::canonical_message(purpose, token_id);
@@ -74,6 +82,10 @@ impl MagicLinkSigner {
         Ok(format!("{}.{}.{}", key.kid, token_id, mac))
     }
 
+    /// Xác minh chữ ký gắn với `purpose` và trả UUID của token.
+    ///
+    /// Trả `BadRequest` khi định dạng, UUID, khóa hoặc MAC không hợp lệ; lỗi tạo HMAC
+    /// được trả dưới dạng `Internal`. Hàm không kiểm tra hạn dùng hay tiêu thụ token.
     pub fn verify(&self, purpose: &str, token: &str) -> AppResult<Uuid> {
         let parts: Vec<&str> = token.split('.').collect();
         if parts.len() != 3 {
@@ -102,6 +114,10 @@ impl MagicLinkSigner {
     }
 }
 
+/// Đọc danh sách `kid:hex_secret` phân cách bằng dấu phẩy, bỏ qua mục trống.
+///
+/// Trả `Config` khi thiếu dấu hai chấm, secret không phải hex hoặc không có khóa.
+/// Độ dài secret và việc chọn khóa đang dùng được kiểm tra khi tạo bộ ký.
 pub fn parse_hmac_keys(raw: &str) -> AppResult<Vec<HmacKey>> {
     let mut keys = Vec::new();
     for part in raw.split(',') {

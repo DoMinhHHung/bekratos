@@ -64,6 +64,9 @@ impl AppError {
         }
     }
 
+    /// Trả thông báo cho client, che chi tiết lỗi cấu hình và lỗi nội bộ.
+    ///
+    /// Thông báo của `BadRequest` được giữ nguyên.
     pub fn public_message(&self) -> String {
         match self {
             Self::Config(_) => "internal server error".to_string(),
@@ -85,6 +88,8 @@ struct ErrorBody {
 }
 
 impl IntoResponse for AppError {
+    /// Chuyển lỗi thành phản hồi HTTP với mã trạng thái và JSON gồm `code`, `message`;
+    /// chi tiết lỗi cấu hình và lỗi nội bộ không xuất hiện trong thông báo công khai.
     fn into_response(self) -> Response {
         let status = self.status_code();
         let body = ErrorBody {

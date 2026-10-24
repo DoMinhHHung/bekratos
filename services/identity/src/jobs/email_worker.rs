@@ -41,6 +41,8 @@ impl EmailWorker {
         }
     }
 
+    /// Thử xử lý một lô email sau mỗi khoảng polling, tiếp tục khi một lượt lỗi
+    /// và dừng khi nhận thay đổi giá trị shutdown thành `true`.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {
@@ -59,6 +61,10 @@ impl EmailWorker {
         }
     }
 
+    /// Nhận lease cho một lô token và thử gửi magic link tương ứng.
+    ///
+    /// Truyền lỗi `Internal` khi không nhận được lô; lỗi ký hoặc gửi từng email
+    /// được chuyển thành lịch thử lại. Bỏ qua lỗi lưu kết quả gửi và lịch thử lại.
     async fn tick(&self) -> AppResult<()> {
         let repo = TokenRepo::new(&self.pool);
         let due = repo
@@ -126,16 +132,20 @@ impl EmailWorker {
     }
 }
 
+/// Trả thời gian chờ thử lại tính bằng giây: 30 giây nhân đôi theo số lần thử,
+/// chặn số lần ở khoảng 1–8 và thời gian chờ tối đa 3.600 giây.
 fn backoff_secs(attempts: i32) -> i64 {
     let exp = attempts.clamp(1, 8) as u32;
     let secs = 30u64.saturating_mul(2u64.saturating_pow(exp.saturating_sub(1)));
     secs.min(3600) as i64
 }
 
+/// Trả thời điểm UTC hiện tại cộng `hours` giờ; giá trị âm cho thời điểm quá khứ.
 pub fn default_expiry(hours: i64) -> chrono::DateTime<Utc> {
     Utc::now() + ChronoDuration::hours(hours)
 }
 
+/// Sinh UUID v7 cho token mới.
 pub fn new_token_id() -> Uuid {
     Uuid::now_v7()
 }

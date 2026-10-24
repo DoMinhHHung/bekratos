@@ -6,6 +6,7 @@ use crate::error::{AppError, AppResult};
 pub struct CredentialRepo;
 
 impl CredentialRepo {
+    /// Lưu hash mật khẩu đã tạo trong giao dịch của bên gọi; lỗi database trả `Internal`.
     pub async fn insert_password_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -28,6 +29,9 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Thêm hash vào lịch sử mật khẩu trong giao dịch của bên gọi, chưa cắt lịch sử.
+    ///
+    /// Lỗi database trả `Internal`.
     pub async fn insert_history_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -52,6 +56,7 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Trả hash mật khẩu hiện tại hoặc `None` khi chưa có; lỗi database trả `Internal`.
     pub async fn find_password_hash(pool: &PgPool, user_id: Uuid) -> AppResult<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as(
             r#"
@@ -70,6 +75,9 @@ impl CredentialRepo {
         Ok(row.map(|r| r.0))
     }
 
+    /// Đọc và khóa hàng credential trong giao dịch, trả hash hiện tại hoặc `None`.
+    ///
+    /// Lỗi database trả `Internal`.
     pub async fn find_password_hash_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -91,6 +99,9 @@ impl CredentialRepo {
         Ok(row.map(|r| r.0))
     }
 
+    /// Thay hash và mốc đổi mật khẩu trong giao dịch của bên gọi.
+    ///
+    /// Trả `Internal` khi truy vấn lỗi hoặc không cập nhật được đúng một credential.
     pub async fn update_password_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -119,6 +130,9 @@ impl CredentialRepo {
         Ok(())
     }
 
+    /// Trả tối đa `limit` hash lịch sử theo thời điểm tạo mới nhất trước.
+    ///
+    /// Lỗi database trả `Internal`.
     pub async fn list_recent_hashes(
         pool: &PgPool,
         user_id: Uuid,
@@ -144,6 +158,9 @@ impl CredentialRepo {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
+    /// Đọc tối đa `limit` hash lịch sử mới nhất trong giao dịch của bên gọi.
+    ///
+    /// Lỗi database trả `Internal`.
     pub async fn list_recent_hashes_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -169,6 +186,8 @@ impl CredentialRepo {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
+    /// Xóa lịch sử ngoài `keep` hash mới nhất trong giao dịch của bên gọi;
+    /// `keep = 0` xóa toàn bộ lịch sử, lỗi database trả `Internal`.
     pub async fn trim_history_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,

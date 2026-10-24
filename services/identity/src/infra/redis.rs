@@ -5,6 +5,9 @@ use redis::Client;
 
 use crate::error::{AppError, AppResult};
 
+/// Tạo kết nối Redis có quản lý với thời gian chờ khởi tạo tối đa 5 giây.
+///
+/// Trả `Unavailable` khi URL không hợp lệ, kết nối lỗi hoặc hết thời gian chờ.
 pub async fn connect(redis_url: &str) -> AppResult<ConnectionManager> {
     let client = Client::open(redis_url).map_err(|e| {
         tracing::error!(error = %e, "redis client open failed");
@@ -24,6 +27,7 @@ pub async fn connect(redis_url: &str) -> AppResult<ConnectionManager> {
     }
 }
 
+/// Kiểm tra Redis bằng PING; trả `Unavailable` khi lệnh lỗi hoặc phản hồi khác PONG.
 pub async fn ping(conn: &mut ConnectionManager) -> AppResult<()> {
     let pong: String = redis::cmd("PING").query_async(conn).await.map_err(|e| {
         tracing::error!(error = %e, "redis ping failed");

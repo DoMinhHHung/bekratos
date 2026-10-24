@@ -12,6 +12,8 @@ use crate::infra::key_crypto::KeyEncryptor;
 use crate::modules::jwks::repo::{JwksRepo, NewSigningKey, SigningKeyRow};
 use crate::state::AppState;
 
+/// Trả JWKS của các khóa active/retiring còn trong thời gian công bố,
+/// bổ sung `kid`, `use` và `alg`; lỗi truy vấn được truyền thành `Internal`.
 pub async fn get_jwks(state: &AppState) -> AppResult<JsonValue> {
     let keys = JwksRepo::list_publishable(&state.db).await?;
     let jwks: Vec<JsonValue> = keys
@@ -29,6 +31,10 @@ pub async fn get_jwks(state: &AppState) -> AppResult<JsonValue> {
     Ok(json!({ "keys": jwks }))
 }
 
+/// Trả khóa active hiện có, hoặc tạo và kích hoạt khóa mới khi chưa có.
+///
+/// Không giải mã hay xác minh khả năng sử dụng khóa hiện có. Truyền `Internal`
+/// từ truy vấn/tạo khóa và `Conflict` nếu không kích hoạt được khóa mới.
 pub async fn ensure_active_key(
     pool: &PgPool,
     key_encryption_key: &str,
@@ -39,6 +45,11 @@ pub async fn ensure_active_key(
     create_and_activate_key(pool, key_encryption_key).await
 }
 
+/// Tạo khóa ES256 mới, lưu khóa riêng đã mã hóa và kích hoạt trong database.
+///
+/// Khóa active cũ chuyển sang retiring và được công bố thêm một giờ. Trả bản ghi
+/// khóa mới sau commit; lỗi mã hóa, database hoặc đọc lại trả `Internal`,
+/// không kích hoạt được bản ghi trả `Conflict`.
 pub async fn create_and_activate_key(
     pool: &PgPool,
     key_encryption_key: &str,
@@ -85,10 +96,18 @@ pub async fn create_and_activate_key(
         .ok_or(AppError::Internal)
 }
 
+/// Tạo và kích hoạt khóa mới trong database bằng khóa mã hóa từ cấu hình.
+///
+/// Trả bản ghi khóa mới hoặc truyền `Internal`/`Conflict` từ quá trình tạo khóa.
+/// Hàm không thay bộ ký hay tập khóa xác minh đang có trong `AppState`.
 pub async fn rotate_key(state: &AppState) -> AppResult<SigningKeyRow> {
     create_and_activate_key(&state.db, &state.config.jwt_key_encryption_key).await
 }
 
+/// Giải mã khóa riêng lưu trong bản ghi, hỗ trợ cơ chế dẫn xuất khóa cũ.
+///
+/// Trả `Internal` nếu giải mã thất bại hoặc nội dung không phải UTF-8;
+/// hàm không kiểm tra nội dung đã giải mã có phải PEM hợp lệ hay không.
 pub fn decrypt_private_pem(encryptor: &KeyEncryptor, row: &SigningKeyRow) -> AppResult<String> {
     let (plain, was_legacy) = encryptor.decrypt_and_was_legacy(&row.private_key_enc)?;
     if was_legacy {
@@ -100,6 +119,9 @@ pub fn decrypt_private_pem(encryptor: &KeyEncryptor, row: &SigningKeyRow) -> App
     String::from_utf8(plain).map_err(|_| AppError::Internal)
 }
 
+/// Chuyển khóa công khai P-256 dạng PEM thành JWK dùng cho chữ ký ES256.
+///
+/// Trả `Internal` khi không đọc được khóa hoặc không lấy được tọa độ công khai.
 fn pem_public_to_jwk(pem: &str, kid: &str) -> AppResult<JsonValue> {
     use p256::pkcs8::DecodePublicKey;
     let public = PublicKey::from_public_key_pem(pem).map_err(|_| AppError::Internal)?;

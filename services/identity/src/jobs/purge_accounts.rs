@@ -13,6 +13,7 @@ pub struct PurgeWorker {
 }
 
 impl PurgeWorker {
+    /// Tạo worker dọn tài khoản với chu kỳ một giờ và mỗi lô tối đa 100 tài khoản.
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
@@ -21,6 +22,8 @@ impl PurgeWorker {
         }
     }
 
+    /// Định kỳ xóa vĩnh viễn tài khoản deleted đã đến hạn purge, tiếp tục khi lỗi
+    /// và dừng khi nhận thay đổi giá trị shutdown thành `true`.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {

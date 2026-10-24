@@ -11,6 +11,7 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/jwks", get(jwks))
 }
 
+/// Trả JWKS gồm các khóa công khai còn được công bố; truyền lỗi truy vấn `Internal`.
 #[utoipa::path(
     get,
     path = "/v1/jwks",

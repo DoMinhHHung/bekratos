@@ -24,6 +24,8 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Tập hợp tài nguyên dùng chung, tạo bộ giới hạn yêu cầu trên Redis
+    /// và semaphore giới hạn số tác vụ Argon2 theo `argon2_max_concurrent`.
     pub fn new(
         config: Config,
         db: PgPool,

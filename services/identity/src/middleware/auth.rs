@@ -18,6 +18,10 @@ pub struct AuthUser {
 impl FromRequestParts<AppState> for AuthUser {
     type Rejection = AppError;
 
+    /// Đọc Bearer token và xác minh tài khoản active cùng phiên còn hạn trong database.
+    ///
+    /// Trả người dùng, phiên và claims; trả `Unauthorized` nếu xác thực không đạt,
+    /// hoặc truyền lỗi `Internal` từ bộ xác minh và truy vấn database.
     async fn from_request_parts(
         parts: &mut Parts,
         state: &AppState,

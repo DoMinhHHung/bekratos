@@ -32,11 +32,15 @@ pub fn router() -> Router<AppState> {
         .route("/v1/auth/restore", post(confirm_restore))
 }
 
+/// Lấy IP từ kết nối trực tiếp, hoặc `unknown` khi thiếu thông tin kết nối.
 fn client_ip(addr: Option<Extension<ConnectInfo<SocketAddr>>>) -> String {
     addr.map(|Extension(ConnectInfo(peer))| peer.ip().to_string())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Lấy token không rỗng sau tiền tố `Bearer ` hoặc `bearer ` trong Authorization.
+///
+/// Trả `Unauthorized` khi thiếu header, không đọc được hoặc sai định dạng.
 fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     let value = headers
         .get(axum::http::header::AUTHORIZATION)
@@ -52,6 +56,10 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     Ok(token)
 }
 
+/// Tiếp nhận đăng ký và trả thông báo trung tính, xếp email xác minh khi phù hợp.
+///
+/// Dữ liệu không hợp lệ trả `BadRequest`; truyền lỗi giới hạn yêu cầu
+/// `TooManyRequests`/`Unavailable` và lỗi xử lý `Internal`.
 #[utoipa::path(
     post,
     path = "/v1/auth/register",
@@ -75,6 +83,10 @@ pub(crate) async fn register(
     Ok(Json(RegisterResponse { message }))
 }
 
+/// Xác minh email bằng token dùng một lần và trả thông báo thành công.
+///
+/// Dữ liệu/token không hợp lệ trả `BadRequest`; truyền lỗi `TooManyRequests`,
+/// `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/verify-email",
@@ -98,6 +110,10 @@ pub(crate) async fn verify_email(
     Ok(Json(VerifyEmailResponse { message }))
 }
 
+/// Yêu cầu email xác minh mới cho tài khoản pending và trả thông báo trung tính.
+///
+/// Dữ liệu không hợp lệ trả `BadRequest`; truyền lỗi `TooManyRequests`,
+/// `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/resend-verification",
@@ -121,6 +137,10 @@ pub(crate) async fn resend_verification(
     Ok(Json(ResendVerificationResponse { message }))
 }
 
+/// Đăng nhập và trả cặp token cùng thời hạn access token tính bằng giây.
+///
+/// Dữ liệu không hợp lệ trả `BadRequest`, xác thực không đạt trả `Unauthorized`;
+/// truyền lỗi `TooManyRequests`, `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/login",
@@ -149,6 +169,9 @@ pub(crate) async fn login(
     Ok(Json(resp))
 }
 
+/// Thu hồi phiên từ Bearer token cùng refresh token và trả thông báo đăng xuất.
+///
+/// Truyền lỗi `Unauthorized` khi xác thực không đạt và `Internal` khi xử lý lỗi.
 #[utoipa::path(
     post,
     path = "/v1/auth/logout",
@@ -170,6 +193,11 @@ pub(crate) async fn logout(
     Ok(Json(LogoutResponse { message }))
 }
 
+/// Đổi refresh token dùng một lần lấy cặp token mới; thời hạn trả về tính bằng giây.
+///
+/// Tái sử dụng token đã dùng/thu hồi làm thu hồi phiên. Dữ liệu không hợp lệ trả
+/// `BadRequest`; truyền lỗi `Unauthorized`, `TooManyRequests`, `Unavailable`
+/// và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/refresh",
@@ -203,6 +231,10 @@ pub(crate) async fn refresh(
     }))
 }
 
+/// Yêu cầu email đặt lại mật khẩu và trả thông báo trung tính về tài khoản.
+///
+/// Dữ liệu không hợp lệ trả `BadRequest`; truyền lỗi `TooManyRequests`,
+/// `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/forgot-password",
@@ -226,6 +258,10 @@ pub(crate) async fn forgot_password(
     Ok(Json(ForgotPasswordResponse { message }))
 }
 
+/// Đặt mật khẩu qua token dùng một lần và thu hồi mọi phiên đăng nhập.
+///
+/// Dữ liệu/token/mật khẩu không hợp lệ trả `BadRequest`; truyền lỗi
+/// `TooManyRequests`, `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/reset-password",
@@ -249,6 +285,10 @@ pub(crate) async fn reset_password(
     Ok(Json(ResetPasswordResponse { message }))
 }
 
+/// Đổi mật khẩu sau khi xác thực Bearer token và mật khẩu hiện tại, giữ phiên hiện tại.
+///
+/// Truyền lỗi `BadRequest` khi dữ liệu/mật khẩu mới không hợp lệ, `Unauthorized`
+/// khi xác thực không đạt và `TooManyRequests`, `Unavailable`, `Internal` khi xử lý lỗi.
 #[utoipa::path(
     post,
     path = "/v1/auth/change-password",
@@ -283,6 +323,10 @@ pub(crate) async fn change_password(
     Ok(Json(ChangePasswordResponse { message }))
 }
 
+/// Yêu cầu email khôi phục tài khoản đã xóa và trả thông báo trung tính.
+///
+/// Dữ liệu không hợp lệ trả `BadRequest`; truyền lỗi `TooManyRequests`,
+/// `Unavailable` và `Internal` từ dịch vụ.
 #[utoipa::path(
     post,
     path = "/v1/auth/request-restore",
@@ -306,6 +350,10 @@ pub(crate) async fn request_restore(
     Ok(Json(RestoreResponse { message }))
 }
 
+/// Khôi phục tài khoản bằng token dùng một lần và trả thông báo thành công.
+///
+/// Truyền `BadRequest` khi dữ liệu/token hoặc điều kiện khôi phục không hợp lệ,
+/// `Internal` khi truy vấn hoặc giao dịch lỗi.
 #[utoipa::path(
     post,
     path = "/v1/auth/restore",

@@ -36,6 +36,7 @@ pub struct Config {
 }
 
 impl std::fmt::Debug for Config {
+    /// Định dạng cấu hình để gỡ lỗi, che URL kết nối và các giá trị khóa bí mật.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Config")
             .field("host", &self.host)
@@ -69,6 +70,10 @@ impl std::fmt::Debug for Config {
 }
 
 impl Config {
+    /// Đọc cấu hình từ môi trường, thử nạp thêm `.env` và bỏ qua lỗi nạp tệp.
+    ///
+    /// Dùng giá trị mặc định cho các tùy chọn có hỗ trợ; trả `Config` khi thiếu
+    /// biến bắt buộc hoặc giá trị không qua kiểm tra. Hàm chưa mở kết nối dịch vụ.
     pub fn from_env() -> AppResult<Self> {
         let _ = dotenvy::dotenv();
 
@@ -229,6 +234,9 @@ impl Config {
     }
 }
 
+/// Đọc boolean không phân biệt hoa thường: `1/true/yes/on` hoặc `0/false/no/off`.
+///
+/// Dùng `default` khi không đọc được biến; trả `Config` với giá trị khác.
 fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
     match env::var(key) {
         Ok(v) => match v.to_ascii_lowercase().as_str() {

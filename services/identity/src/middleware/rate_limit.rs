@@ -28,6 +28,10 @@ impl RateLimiter {
         hex::encode(hasher.finalize())
     }
 
+    /// Tăng bộ đếm cho nhóm `endpoint`/`dimension` và định danh `id` đã băm.
+    ///
+    /// Cửa sổ tính bằng giây bắt đầu ở lần tăng đầu tiên. Yêu cầu vượt `limit` vẫn
+    /// làm tăng bộ đếm và trả `TooManyRequests`; lỗi Redis trả `Unavailable`.
     pub async fn check_and_incr(
         &self,
         endpoint: &str,

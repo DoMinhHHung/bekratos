@@ -30,6 +30,9 @@ impl<'a> TokenRepo<'a> {
         Self { pool }
     }
 
+    /// Lưu token theo mục đích với địa chỉ email nhận và hạn dùng, sẵn sàng để worker gửi.
+    ///
+    /// Trả bản ghi mới hoặc `Internal` khi database lỗi.
     pub async fn insert(
         &self,
         id: Uuid,
@@ -63,6 +66,10 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Lưu token sẵn sàng để worker gửi trong giao dịch của bên gọi.
+    ///
+    /// `purpose` phân biệt xác minh email, đặt lại mật khẩu và khôi phục tài khoản.
+    /// Trả bản ghi mới hoặc `Internal` khi database lỗi.
     pub async fn insert_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -96,6 +103,8 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Thu hồi token cùng người dùng và mục đích chưa dùng/chưa thu hồi, kể cả token hết hạn,
+    /// trong giao dịch của bên gọi. Trả số hàng cập nhật hoặc `Internal` khi truy vấn lỗi.
     pub async fn revoke_active_for_user_purpose_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -122,6 +131,10 @@ impl<'a> TokenRepo<'a> {
         Ok(result.rows_affected())
     }
 
+    /// Đánh dấu nguyên tử token đúng mục đích, chưa dùng/thu hồi và chưa hết hạn là đã dùng.
+    ///
+    /// Trả bản ghi trong giao dịch của bên gọi, `None` nếu không đủ điều kiện
+    /// hoặc `Internal` khi truy vấn lỗi; token đến đúng hạn hết hiệu lực không được dùng.
     pub async fn consume_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -153,6 +166,11 @@ impl<'a> TokenRepo<'a> {
         Ok(row)
     }
 
+    /// Nhận tối đa `limit` token chưa gửi, chưa dùng/thu hồi, còn hạn và đã đến lịch gửi.
+    ///
+    /// Ưu tiên token tạo trước, bỏ qua hàng bị khóa; đặt lease dài `lease_secs` giây
+    /// và tăng số lần thử trước khi trả bản ghi. Lease cũ phải hết hạn trước thời điểm
+    /// hiện tại mới được nhận lại. Lỗi database trả `Internal`.
     pub async fn claim_due_for_delivery(
         &self,
         limit: i64,
@@ -195,6 +213,9 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    /// Đánh dấu token đã gửi, xóa lease, lịch thử lại và mã lỗi gửi trước đó.
+    ///
+    /// Không có token vẫn thành công; lỗi database trả `Internal`.
     pub async fn mark_sent(&self, id: Uuid) -> AppResult<()> {
         sqlx::query(
             r#"
@@ -216,6 +237,9 @@ impl<'a> TokenRepo<'a> {
         Ok(())
     }
 
+    /// Lưu mã lỗi gửi, giải phóng lease và hẹn thử lại sau `backoff_secs` giây.
+    ///
+    /// Không có token vẫn thành công; lỗi database trả `Internal`.
     pub async fn mark_delivery_failure(
         &self,
         id: Uuid,

@@ -8,6 +8,10 @@ use crate::modules::user::dto::{
 use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
 
+/// Xác minh access token, tài khoản active và phiên đúng chủ sở hữu, còn hạn.
+///
+/// Trả cặp ID người dùng/phiên; xác thực không đạt trả `Unauthorized`, còn lỗi
+/// bộ xác minh hoặc truy vấn được truyền lên dưới dạng `Internal`.
 async fn require_active_session(state: &AppState, access_token: &str) -> AppResult<(Uuid, Uuid)> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
@@ -35,6 +39,10 @@ async fn require_active_session(state: &AppState, access_token: &str) -> AppResu
     Ok((user_id, session_id))
 }
 
+/// Trả hồ sơ, email chính và username của người dùng có tài khoản active và phiên hợp lệ.
+///
+/// Trả `Unauthorized` khi xác thực không đạt hoặc không còn người dùng;
+/// truyền lỗi `Internal` từ bộ xác minh và database.
 pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<ProfileResponse> {
     let (user_id, _) = require_active_session(state, access_token).await?;
 
@@ -57,6 +65,11 @@ pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<Prof
     })
 }
 
+/// Cập nhật các trường hồ sơ được cung cấp và trả hồ sơ đọc lại sau commit.
+///
+/// Trường `None` giữ giá trị hiện có. Yêu cầu tài khoản active và phiên hợp lệ;
+/// truyền `Unauthorized` khi xác thực không đạt và `Internal` khi xử lý lỗi,
+/// kể cả lúc đọc lại sau khi thay đổi đã được lưu.
 pub async fn update_profile(
     state: &AppState,
     access_token: &str,
@@ -88,6 +101,9 @@ pub async fn update_profile(
     get_profile(state, access_token).await
 }
 
+/// Liệt kê phiên chưa thu hồi, chưa hết hạn theo lần hoạt động gần nhất trước,
+/// đồng thời đánh dấu phiên hiện tại. Yêu cầu tài khoản active và phiên hợp lệ;
+/// truyền lỗi `Unauthorized` hoặc `Internal` từ xác minh và truy vấn.
 pub async fn list_sessions(state: &AppState, access_token: &str) -> AppResult<SessionListResponse> {
     let (user_id, current_sid) = require_active_session(state, access_token).await?;
 
@@ -111,6 +127,10 @@ pub async fn list_sessions(state: &AppState, access_token: &str) -> AppResult<Se
     Ok(SessionListResponse { sessions })
 }
 
+/// Thu hồi một phiên khác của người dùng cùng các refresh token của phiên đó
+/// và trả thông báo thành công. Trả `BadRequest` nếu chọn phiên hiện tại,
+/// `NotFound` nếu phiên đích không tồn tại hoặc thuộc người khác; truyền lỗi
+/// `Unauthorized`/`Internal` từ xác thực, truy vấn và giao dịch.
 pub async fn revoke_session(
     state: &AppState,
     access_token: &str,
@@ -141,6 +161,10 @@ pub async fn revoke_session(
     Ok("Session revoked.".to_string())
 }
 
+/// Thu hồi mọi phiên khác cùng refresh token, giữ phiên hiện tại và trả thông báo.
+///
+/// Yêu cầu tài khoản active và phiên hợp lệ; truyền lỗi `Unauthorized` hoặc
+/// `Internal` từ xác thực, truy vấn và giao dịch.
 pub async fn revoke_other_sessions(state: &AppState, access_token: &str) -> AppResult<String> {
     let (user_id, current_sid) = require_active_session(state, access_token).await?;
 

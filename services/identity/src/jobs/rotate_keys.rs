@@ -11,6 +11,7 @@ pub struct KeyReconcileWorker {
 }
 
 impl KeyReconcileWorker {
+    /// Tạo worker đối soát trạng thái khóa với chu kỳ 300 giây.
     pub fn new(pool: PgPool) -> Self {
         Self {
             pool,
@@ -18,6 +19,10 @@ impl KeyReconcileWorker {
         }
     }
 
+    /// Định kỳ chuyển khóa retiring hết thời gian công bố sang retired.
+    ///
+    /// Tiếp tục khi cập nhật lỗi và dừng khi nhận thay đổi giá trị shutdown thành
+    /// `true`; worker không tạo khóa mới hay cập nhật bộ xác minh JWT trong bộ nhớ.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
         loop {
             tokio::select! {

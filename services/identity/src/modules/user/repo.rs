@@ -60,6 +60,8 @@ impl<'a> UserRepo<'a> {
         Self { pool }
     }
 
+    /// Tìm tài khoản theo ID ở mọi trạng thái; trả `None` nếu không có
+    /// và `Internal` nếu truy vấn lỗi.
     pub async fn find_by_id(&self, id: Uuid) -> AppResult<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
             r#"
@@ -87,6 +89,9 @@ impl<'a> UserRepo<'a> {
         Ok(row)
     }
 
+    /// Tìm tài khoản cùng bản ghi email khớp địa chỉ, không phân biệt hoa thường.
+    ///
+    /// Trả `None` khi không có email/tài khoản, `Internal` khi truy vấn lỗi.
     pub async fn find_by_email(&self, email: &str) -> AppResult<Option<(UserRow, UserEmailRow)>> {
         let email_row = sqlx::query_as::<_, UserEmailRow>(
             r#"
@@ -111,6 +116,8 @@ impl<'a> UserRepo<'a> {
         Ok(user.map(|u| (u, email_row)))
     }
 
+    /// Tìm tài khoản theo username không phân biệt hoa thường; trả `None` nếu không có
+    /// và `Internal` nếu truy vấn lỗi.
     pub async fn find_by_username(&self, username: &str) -> AppResult<Option<UserRow>> {
         let row = sqlx::query_as::<_, UserRow>(
             r#"
@@ -139,6 +146,7 @@ impl<'a> UserRepo<'a> {
         Ok(row)
     }
 
+    /// Tạo tài khoản pending và trả bản ghi đã lưu; mọi lỗi database trả `Internal`.
     pub async fn insert_pending(
         &self,
         id: Uuid,
@@ -173,6 +181,9 @@ impl<'a> UserRepo<'a> {
         Ok(row)
     }
 
+    /// Tạo tài khoản pending trong giao dịch của bên gọi và trả bản ghi mới.
+    ///
+    /// Vi phạm ràng buộc duy nhất trả `Conflict`; lỗi database khác trả `Internal`.
     pub async fn insert_pending_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -204,6 +215,7 @@ impl<'a> UserRepo<'a> {
         Ok(row)
     }
 
+    /// Thêm hồ sơ cho tài khoản trong giao dịch của bên gọi; lỗi database trả `Internal`.
     pub async fn insert_profile_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -228,6 +240,9 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Thêm email chưa xác minh trong giao dịch của bên gọi; `is_primary` chọn email chính.
+    ///
+    /// Vi phạm ràng buộc duy nhất trả `Conflict`; lỗi database khác trả `Internal`.
     pub async fn insert_email_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -251,6 +266,9 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Gắn username cho tài khoản trong giao dịch của bên gọi.
+    ///
+    /// Vi phạm ràng buộc duy nhất trả `Conflict`; lỗi database khác trả `Internal`.
     pub async fn insert_username_tx(
         tx: &mut Transaction<'_, Postgres>,
         id: Uuid,
@@ -272,6 +290,8 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Lưu việc chấp nhận chính sách cùng phiên bản và hash tài liệu trong giao dịch
+    /// của bên gọi; lỗi database trả `Internal`.
     pub async fn insert_policy_acceptance_tx(
         tx: &mut Transaction<'_, Postgres>,
         input: NewPolicyAcceptance<'_>,
@@ -300,6 +320,9 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Chuyển tài khoản pending thành active và đánh dấu email tương ứng đã xác minh
+    /// trong giao dịch của bên gọi. Trả `BadRequest` nếu không cập nhật được đúng
+    /// một tài khoản và một email chưa xác minh; lỗi database trả `Internal`.
     pub async fn activate_verified_email_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -348,6 +371,7 @@ impl<'a> UserRepo<'a> {
     }
 }
 
+/// Nhận diện lỗi database có SQLSTATE `23505` do vi phạm ràng buộc duy nhất.
 pub fn is_unique_violation(err: &sqlx::Error) -> bool {
     match err {
         sqlx::Error::Database(db) => db.code().as_deref() == Some("23505"),
@@ -355,6 +379,7 @@ pub fn is_unique_violation(err: &sqlx::Error) -> bool {
     }
 }
 
+/// Chuyển vi phạm ràng buộc duy nhất thành `Conflict`, lỗi SQLx khác thành `Internal`.
 fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
     if is_unique_violation(&err) {
         tracing::debug!(error = %err, "{context} unique violation");
@@ -365,6 +390,9 @@ fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
 }
 
 impl<'a> UserRepo<'a> {
+    /// Trả tài khoản kèm hồ sơ, email chính và username; dữ liệu phụ thiếu có giá trị `None`.
+    ///
+    /// Trả `None` nếu tài khoản không tồn tại và `Internal` khi truy vấn lỗi.
     pub async fn load_profile_bundle(&self, user_id: Uuid) -> AppResult<Option<ProfileBundle>> {
         #[derive(sqlx::FromRow)]
         struct Bundle {
@@ -434,6 +462,9 @@ impl<'a> UserRepo<'a> {
         }))
     }
 
+    /// Trả trạng thái tài khoản cùng tên đầy đủ, tên hiển thị và URL ảnh nếu có.
+    ///
+    /// Trả `None` khi tài khoản không tồn tại và `Internal` khi truy vấn lỗi.
     pub async fn find_profile(&self, user_id: Uuid) -> AppResult<Option<ProfileRow>> {
         let row: Option<ProfileRow> = sqlx::query_as(
             r#"
@@ -457,6 +488,7 @@ impl<'a> UserRepo<'a> {
         Ok(row)
     }
 
+    /// Trả địa chỉ email chính, hoặc `None` khi chưa có; lỗi truy vấn trả `Internal`.
     pub async fn find_primary_email(&self, user_id: Uuid) -> AppResult<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as(
             r#"
@@ -475,6 +507,7 @@ impl<'a> UserRepo<'a> {
         Ok(row.map(|r| r.0))
     }
 
+    /// Trả username, hoặc `None` khi chưa có; lỗi truy vấn trả `Internal`.
     pub async fn find_username(&self, user_id: Uuid) -> AppResult<Option<String>> {
         let row: Option<(String,)> = sqlx::query_as(
             r#"
@@ -491,6 +524,9 @@ impl<'a> UserRepo<'a> {
         Ok(row.map(|r| r.0))
     }
 
+    /// Cập nhật hồ sơ trong giao dịch của bên gọi; `None` giữ nguyên trường hiện có.
+    ///
+    /// Không tìm thấy hồ sơ vẫn thành công; lỗi database trả `Internal`.
     pub async fn update_profile_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -521,6 +557,9 @@ impl<'a> UserRepo<'a> {
         })?;
         Ok(())
     }
+    /// Cập nhật locale và múi giờ trong giao dịch của bên gọi; `None` giữ giá trị cũ.
+    ///
+    /// Không tìm thấy tài khoản vẫn thành công; lỗi database trả `Internal`.
     pub async fn update_user_meta_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -548,6 +587,9 @@ impl<'a> UserRepo<'a> {
         })?;
         Ok(())
     }
+    /// Chuyển tài khoản pending/active/suspended sang deleted, giữ trạng thái cũ
+    /// và đặt thời điểm xóa vĩnh viễn `purge_after` trong giao dịch của bên gọi.
+    /// Trả `Conflict` nếu không đổi được đúng một tài khoản, `Internal` khi truy vấn lỗi.
     pub async fn soft_delete_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,
@@ -579,6 +621,11 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Khôi phục tài khoản deleted về trạng thái cũ, mặc định active nếu thiếu trạng thái cũ.
+    ///
+    /// Chỉ khôi phục khi chưa đến `purge_after` hoặc không có hạn; xóa các mốc xóa
+    /// trong giao dịch của bên gọi. Trả `BadRequest` nếu không đủ điều kiện/không có
+    /// tài khoản và `Internal` khi truy vấn lỗi.
     pub async fn restore_tx(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> AppResult<()> {
         let res = sqlx::query(
             r#"
@@ -607,6 +654,9 @@ impl<'a> UserRepo<'a> {
         Ok(())
     }
 
+    /// Xóa vĩnh viễn tối đa `limit` tài khoản deleted đã đến hạn purge, ưu tiên hạn cũ nhất
+    /// và bỏ qua hàng đang bị khóa. Trả số hàng đã xóa; `limit <= 0` trả 0,
+    /// lỗi database trả `Internal`.
     pub async fn hard_delete_expired(pool: &sqlx::PgPool, limit: i64) -> AppResult<u64> {
         if limit <= 0 {
             return Ok(0);
