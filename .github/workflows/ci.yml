@@ -5,14 +5,14 @@ on:
     branches: [main]
     paths:
       - "services/identity/**"
-      - ".github/workflows/ci_identity.yml"
+      - ".github/workflows/**"
       - "README.md"
       - "docs/**"
       - ".gitignore"
   pull_request:
     paths:
       - "services/identity/**"
-      - ".github/workflows/ci_identity.yml"
+      - ".github/workflows/**"
       - "README.md"
       - "docs/**"
       - ".gitignore"
@@ -48,6 +48,29 @@ jobs:
     name: Rust quality and tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bekratos
+          POSTGRES_PASSWORD: bekratos
+          POSTGRES_DB: bekratos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bekratos -d bekratos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -95,6 +118,8 @@ jobs:
         if: steps.detect.outputs.has_manifest == 'true'
         env:
           SQLX_OFFLINE: "true"
+          DATABASE_URL_TEST: postgres://bekratos:bekratos@localhost:5432/bekratos_test
+          REDIS_URL_TEST: redis://localhost:6379
         working-directory: services/identity
         run: cargo test --locked --all-targets
       - name: Install cargo-audit
@@ -104,3 +129,10 @@ jobs:
         if: steps.detect.outputs.has_manifest == 'true'
         working-directory: services/identity
         run: cargo audit --deny warnings
+      - name: Build container image
+        if: steps.detect.outputs.has_manifest == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: services/identity
+          push: false
+          tags: bekratos-identity:ci

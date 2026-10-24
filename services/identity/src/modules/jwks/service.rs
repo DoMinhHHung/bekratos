@@ -4,6 +4,7 @@ use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
 use p256::PublicKey;
 use rand::rngs::OsRng;
 use serde_json::{json, Value as JsonValue};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -28,16 +29,22 @@ pub async fn get_jwks(state: &AppState) -> AppResult<JsonValue> {
     Ok(json!({ "keys": jwks }))
 }
 
-pub async fn ensure_active_key(state: &AppState) -> AppResult<SigningKeyRow> {
-    if let Some(active) = JwksRepo::find_active(&state.db).await? {
+pub async fn ensure_active_key(
+    pool: &PgPool,
+    key_encryption_key: &str,
+) -> AppResult<SigningKeyRow> {
+    if let Some(active) = JwksRepo::find_active(pool).await? {
         return Ok(active);
     }
-    create_and_activate_key(state).await
+    create_and_activate_key(pool, key_encryption_key).await
 }
 
-pub async fn create_and_activate_key(state: &AppState) -> AppResult<SigningKeyRow> {
-    let encryptor = KeyEncryptor::new(&state.config.jwt_key_encryption_key)?;
-    let version = JwksRepo::next_version(&state.db).await?;
+pub async fn create_and_activate_key(
+    pool: &PgPool,
+    key_encryption_key: &str,
+) -> AppResult<SigningKeyRow> {
+    let encryptor = KeyEncryptor::new(key_encryption_key)?;
+    let version = JwksRepo::next_version(pool).await?;
     let kid = format!("es256-{}", version);
 
     let signing_key = SigningKey::random(&mut OsRng);
@@ -53,7 +60,7 @@ pub async fn create_and_activate_key(state: &AppState) -> AppResult<SigningKeyRo
     let public_jwk = pem_public_to_jwk(&public_pem, &kid)?;
 
     let id = Uuid::now_v7();
-    let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
+    let mut tx = pool.begin().await.map_err(|_| AppError::Internal)?;
 
     JwksRepo::insert_tx(
         &mut tx,
@@ -73,13 +80,13 @@ pub async fn create_and_activate_key(state: &AppState) -> AppResult<SigningKeyRo
 
     tx.commit().await.map_err(|_| AppError::Internal)?;
 
-    JwksRepo::find_by_kid(&state.db, &kid)
+    JwksRepo::find_by_kid(pool, &kid)
         .await?
         .ok_or(AppError::Internal)
 }
 
 pub async fn rotate_key(state: &AppState) -> AppResult<SigningKeyRow> {
-    create_and_activate_key(state).await
+    create_and_activate_key(&state.db, &state.config.jwt_key_encryption_key).await
 }
 
 pub fn decrypt_private_pem(encryptor: &KeyEncryptor, row: &SigningKeyRow) -> AppResult<String> {

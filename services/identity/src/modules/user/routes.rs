@@ -97,3 +97,17 @@ async fn delete_account(
     let message = crate::modules::auth::service::request_delete(&state, token, &ip).await?;
     Ok(Json(MessageResponse { message }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::client_ip;
+    use axum::extract::ConnectInfo;
+    use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn client_ip_uses_only_the_connection_peer() {
+        let peer = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 8080);
+        assert_eq!(client_ip(Some(ConnectInfo(peer))), "::1");
+        assert_eq!(client_ip(None), "unknown");
+    }
+}

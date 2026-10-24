@@ -204,3 +204,17 @@ async fn confirm_restore(
     let message = service::confirm_restore(&state, &ip, &body.token).await?;
     Ok(Json(RestoreResponse { message }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::client_ip;
+    use axum::extract::ConnectInfo;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn client_ip_uses_only_the_connection_peer() {
+        let peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10)), 8080);
+        assert_eq!(client_ip(Some(ConnectInfo(peer))), "192.0.2.10");
+        assert_eq!(client_ip(None), "unknown");
+    }
+}

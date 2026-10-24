@@ -124,7 +124,6 @@ async fn main() {
         reconcile.run(shutdown_rx_reconcile).await;
     });
 
-    let bootstrap_state_config = config.clone();
     let encryptor = match KeyEncryptor::new(&config.jwt_key_encryption_key) {
         Ok(e) => e,
         Err(e) => {
@@ -133,27 +132,7 @@ async fn main() {
         }
     };
 
-    let temp_state_for_keys = AppState::new(
-        bootstrap_state_config.clone(),
-        pool.clone(),
-        redis.clone(),
-        password_policy.clone(),
-        signer.clone(),
-        JwtSigner::from_pem(
-            "-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAAAAAAAAAAAKEHYiH0p4EXAMPLE\n-----END PRIVATE KEY-----",
-            "bootstrap".into(),
-            config.jwt_issuer.clone(),
-            config.jwt_audience.clone(),
-            config.jwt_access_ttl_secs,
-        )
-        .unwrap_or_else(|_| {
-            tracing::error!("bootstrap placeholder signer failed");
-            std::process::exit(1);
-        }),
-        JwtVerifier::new(config.jwt_issuer.clone(), config.jwt_audience.clone()),
-    );
-
-    let active_row = match ensure_active_key(&temp_state_for_keys).await {
+    let active_row = match ensure_active_key(&pool, &config.jwt_key_encryption_key).await {
         Ok(r) => r,
         Err(e) => {
             if !config.jwt_signing_key_pem.is_empty() {
