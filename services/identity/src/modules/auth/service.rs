@@ -422,7 +422,7 @@ pub async fn login(
 }
 
 pub async fn logout(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
 
     let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
@@ -775,7 +775,7 @@ pub async fn change_password(
     current_password: &str,
     new_password: &str,
 ) -> AppResult<String> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 
@@ -872,7 +872,7 @@ pub async fn change_password(
 }
 
 pub async fn request_delete(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
-    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let purge_after = Utc::now() + ChronoDuration::days(PURGE_AFTER_DAYS);

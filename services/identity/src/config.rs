@@ -28,6 +28,8 @@ pub struct Config {
     pub jwt_issuer: String,
     pub jwt_audience: String,
     pub jwt_access_ttl_secs: i64,
+    pub jwt_key_encryption_key: String,
+    pub jwks_cache_ttl_secs: u64,
     pub refresh_ttl_secs: i64,
     pub session_ttl_secs: i64,
 }
@@ -123,6 +125,17 @@ impl Config {
         if jwt_access_ttl_secs <= 0 || refresh_ttl_secs <= 0 || session_ttl_secs <= 0 {
             return Err(AppError::config("token/session TTLs must be > 0"));
         }
+        let jwt_key_encryption_key = env::var("JWT_KEY_ENCRYPTION_KEY")
+            .map_err(|_| AppError::config("JWT_KEY_ENCRYPTION_KEY is required"))?;
+        if jwt_key_encryption_key.len() < 32 {
+            return Err(AppError::config(
+                "JWT_KEY_ENCRYPTION_KEY must be at least 32 characters",
+            ));
+        }
+        let jwks_cache_ttl_secs: u64 = env::var("JWKS_CACHE_TTL_SECS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse()
+            .map_err(|_| AppError::config("JWKS_CACHE_TTL_SECS must be u64"))?;
 
         Ok(Self {
             host,
@@ -149,6 +162,8 @@ impl Config {
             jwt_access_ttl_secs,
             refresh_ttl_secs,
             session_ttl_secs,
+            jwt_key_encryption_key,
+            jwks_cache_ttl_secs,
         })
     }
 }
