@@ -1,4 +1,4 @@
-use sqlx::{Postgres, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -50,5 +50,23 @@ impl CredentialRepo {
             AppError::Internal
         })?;
         Ok(())
+    }
+
+    pub async fn find_password_hash(pool: &PgPool, user_id: Uuid) -> AppResult<Option<String>> {
+        let row: Option<(String,)> = sqlx::query_as(
+            r#"
+            SELECT password_hash
+            FROM credential.password_credentials
+            WHERE user_id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "find password hash failed");
+            AppError::Internal
+        })?;
+        Ok(row.map(|r| r.0))
     }
 }

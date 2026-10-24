@@ -1,7 +1,8 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use p256::pkcs8::DecodePrivateKey;
 use p256::pkcs8::EncodePrivateKey;
+use p256::pkcs8::EncodePublicKey;
 use p256::SecretKey;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -11,6 +12,7 @@ use crate::error::{AppError, AppResult};
 #[derive(Clone)]
 pub struct JwtSigner {
     encoding_key: EncodingKey,
+    decoding_key: DecodingKey,
     kid: String,
     issuer: String,
     audience: String,
@@ -68,8 +70,19 @@ impl JwtSigner {
             AppError::config("JWT_SIGNING_KEY_PEM cannot be used for ES256")
         })?;
 
+        let public_pem = secret
+            .public_key()
+            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
+            .map_err(|_| AppError::config("failed to encode public key"))?;
+
+        let decoding_key = DecodingKey::from_ec_pem(public_pem.as_bytes()).map_err(|e| {
+            tracing::error!(error = %e, "DecodingKey from PEM failed");
+            AppError::config("cannot build DecodingKey for ES256")
+        })?;
+
         Ok(Self {
             encoding_key,
+            decoding_key,
             kid,
             issuer,
             audience,
@@ -97,6 +110,22 @@ impl JwtSigner {
             tracing::error!(error = %e, "jwt encode failed");
             AppError::Internal
         })
+    }
+
+    pub fn verify_access_token(&self, token: &str) -> AppResult<AccessClaims> {
+        let mut validation = Validation::new(Algorithm::ES256);
+        validation.set_issuer(&[&self.issuer]);
+        validation.set_audience(&[&self.audience]);
+        validation.validate_nbf = true;
+
+        let data = decode::<AccessClaims>(token, &self.decoding_key, &validation)
+            .map_err(|_| AppError::Unauthorized)?;
+
+        if data.header.kid.as_deref() != Some(self.kid.as_str()) {
+            return Err(AppError::Unauthorized);
+        }
+
+        Ok(data.claims)
     }
 
     pub fn access_ttl_secs(&self) -> i64 {

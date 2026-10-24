@@ -5,12 +5,15 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::infra::password::dummy_verify;
+use crate::infra::refresh_token::{generate_opaque_token, hash_token};
 use crate::modules::credential::repo::CredentialRepo;
+use crate::modules::session::repo::{RefreshTokenRepo, SessionRepo};
 use crate::modules::token::repo::TokenRepo;
 use crate::modules::user::repo::{NewPolicyAcceptance, UserRepo};
 use crate::state::AppState;
 
-use super::dto::RegisterRequest;
+use super::dto::{LoginRequest, LoginResponse, RegisterRequest};
 
 const NEUTRAL_REGISTER_MSG: &str =
     "If the information is valid, a verification email will be sent.";
@@ -33,6 +36,10 @@ fn normalize_email(email: &str) -> String {
 
 fn normalize_username(username: &str) -> String {
     username.trim().to_ascii_lowercase()
+}
+
+fn looks_like_email(s: &str) -> bool {
+    s.contains('@')
 }
 
 pub async fn register(state: &AppState, ip: &str, body: RegisterRequest) -> AppResult<String> {
@@ -271,4 +278,233 @@ pub async fn resend_verification(state: &AppState, ip: &str, email_raw: &str) ->
     })?;
 
     Ok(NEUTRAL_RESEND_MSG.to_string())
+}
+
+pub async fn login(
+    state: &AppState,
+    ip: &str,
+    user_agent: Option<&str>,
+    body: LoginRequest,
+) -> AppResult<LoginResponse> {
+    let login = body.login.trim().to_ascii_lowercase();
+    let password = body.password.clone();
+
+    state
+        .rate_limiter
+        .check_and_incr("login", "ip", ip, 20, 900)
+        .await?;
+    state
+        .rate_limiter
+        .check_and_incr("login", "id", &login, 10, 900)
+        .await?;
+
+    let user_repo = UserRepo::new(&state.db);
+
+    let user = if looks_like_email(&login) {
+        user_repo.find_by_email(&login).await?.map(|(u, _)| u)
+    } else {
+        user_repo.find_by_username(&login).await?
+    };
+
+    let Some(user) = user else {
+        dummy_verify();
+        insert_security_event(state, "login_failed", None, None, Some(ip), user_agent).await;
+        return Err(AppError::Unauthorized);
+    };
+
+    if user.status != "active" {
+        dummy_verify();
+        insert_security_event(
+            state,
+            "login_failed",
+            Some(user.id),
+            None,
+            Some(ip),
+            user_agent,
+        )
+        .await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let hash = CredentialRepo::find_password_hash(&state.db, user.id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    let policy = state.password_policy.clone();
+    let password_ok = tokio::task::spawn_blocking(move || policy.verify(&password, &hash))
+        .await
+        .map_err(|_| AppError::Internal)??;
+
+    if !password_ok {
+        insert_security_event(
+            state,
+            "login_failed",
+            Some(user.id),
+            None,
+            Some(ip),
+            user_agent,
+        )
+        .await;
+        return Err(AppError::Unauthorized);
+    }
+
+    let session_id = Uuid::now_v7();
+    let refresh_id = Uuid::now_v7();
+    let now = Utc::now();
+    let session_expires = now + ChronoDuration::seconds(state.config.session_ttl_secs);
+    let refresh_expires = now + ChronoDuration::seconds(state.config.refresh_ttl_secs);
+    let refresh_expires = if refresh_expires > session_expires {
+        session_expires
+    } else {
+        refresh_expires
+    };
+
+    let raw_refresh = generate_opaque_token();
+    let token_hash = hash_token(&raw_refresh);
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin login transaction failed");
+        AppError::Internal
+    })?;
+
+    SessionRepo::insert_tx(
+        &mut tx,
+        session_id,
+        user.id,
+        Some(ip),
+        user_agent,
+        body.device_name.as_deref(),
+        session_expires,
+    )
+    .await?;
+
+    RefreshTokenRepo::insert_tx(
+        &mut tx,
+        refresh_id,
+        session_id,
+        None,
+        &token_hash,
+        refresh_expires,
+    )
+    .await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "login_success",
+        Some(user.id),
+        Some(session_id),
+        Some(ip),
+        user_agent,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit login transaction failed");
+        AppError::Internal
+    })?;
+
+    let access_token = state.jwt_signer.issue_access_token(user.id, session_id)?;
+
+    Ok(LoginResponse {
+        access_token,
+        refresh_token: raw_refresh,
+        token_type: "Bearer".to_string(),
+        expires_in: state.jwt_signer.access_ttl_secs(),
+    })
+}
+
+pub async fn logout(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
+    let claims = state.jwt_signer.verify_access_token(access_token)?;
+
+    let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let mut tx = state.db.begin().await.map_err(|e| {
+        tracing::error!(error = %e, "begin logout transaction failed");
+        AppError::Internal
+    })?;
+
+    let session = SessionRepo::find_by_id_for_update_tx(&mut tx, session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    if session.user_id != user_id || session.revoked_at.is_some() {
+        let _ = tx.rollback().await;
+        return Err(AppError::Unauthorized);
+    }
+
+    SessionRepo::revoke_tx(&mut tx, session_id, "logout").await?;
+    RefreshTokenRepo::revoke_all_for_session_tx(&mut tx, session_id).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "logout",
+        Some(user_id),
+        Some(session_id),
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|e| {
+        tracing::error!(error = %e, "commit logout transaction failed");
+        AppError::Internal
+    })?;
+
+    Ok("Logged out.".to_string())
+}
+
+async fn insert_security_event(
+    state: &AppState,
+    event_type: &str,
+    user_id: Option<Uuid>,
+    session_id: Option<Uuid>,
+    ip: Option<&str>,
+    user_agent: Option<&str>,
+) {
+    let id = Uuid::now_v7();
+    let _ = sqlx::query(
+        r#"
+        INSERT INTO audit.security_events (id, event_type, user_id, session_id, ip, user_agent)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(id)
+    .bind(event_type)
+    .bind(user_id)
+    .bind(session_id)
+    .bind(ip)
+    .bind(user_agent)
+    .execute(&state.db)
+    .await;
+}
+
+async fn insert_security_event_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event_type: &str,
+    user_id: Option<Uuid>,
+    session_id: Option<Uuid>,
+    ip: Option<&str>,
+    user_agent: Option<&str>,
+) -> AppResult<()> {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO audit.security_events (id, event_type, user_id, session_id, ip, user_agent)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        "#,
+    )
+    .bind(id)
+    .bind(event_type)
+    .bind(user_id)
+    .bind(session_id)
+    .bind(ip)
+    .bind(user_agent)
+    .execute(&mut **tx)
+    .await
+    .map_err(|e| {
+        tracing::error!(error = %e, "insert security event failed");
+        AppError::Internal
+    })?;
+    Ok(())
 }

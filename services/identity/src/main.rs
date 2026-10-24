@@ -103,12 +103,26 @@ async fn main() {
         },
     );
 
+    let jwt_signer = match identity::infra::jwt::JwtSigner::from_pem(
+        &config.jwt_signing_key_pem,
+        config.jwt_kid.clone(),
+        config.jwt_issuer.clone(),
+        config.jwt_audience.clone(),
+        config.jwt_access_ttl_secs,
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid JWT signing configuration");
+            std::process::exit(1);
+        }
+    };
+
     tokio::spawn(async move {
         worker.run(shutdown_rx).await;
     });
 
     let addr = config.bind_addr;
-    let state = AppState::new(config, pool, redis, password_policy, signer);
+    let state = AppState::new(config, pool, redis, password_policy, signer, jwt_signer);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {
