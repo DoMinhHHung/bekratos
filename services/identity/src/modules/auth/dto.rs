@@ -30,3 +30,14 @@ pub struct VerifyEmailRequest {
 pub struct VerifyEmailResponse {
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct ResendVerificationRequest {
+    #[validate(email(message = "invalid email"))]
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ResendVerificationResponse {
+    pub message: String,
+}
