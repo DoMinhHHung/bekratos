@@ -28,6 +28,10 @@ const NEUTRAL_FORGOT_MSG: &str =
     "If an account with that email exists, a password reset link will be sent.";
 const PASSWORD_RESET_TTL_HOURS: i64 = 1;
 const PASSWORD_HISTORY_LIMIT: i64 = 5;
+const RESTORE_TTL_HOURS: i64 = 48;
+const PURGE_AFTER_DAYS: i64 = 30;
+const NEUTRAL_RESTORE_MSG: &str =
+    "If a deleted account with that email exists and is within the restore window, a restore link will be sent.";
 
 fn username_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -865,4 +869,93 @@ pub async fn change_password(
     })?;
 
     Ok("Password has been changed.".to_string())
+}
+
+pub async fn request_delete(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
+    let claims = state.jwt_signer.verify_access_token(access_token)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let purge_after = Utc::now() + ChronoDuration::days(PURGE_AFTER_DAYS);
+
+    let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
+
+    UserRepo::soft_delete_tx(&mut tx, user_id, purge_after).await?;
+    SessionRepo::revoke_all_for_user_tx(&mut tx, user_id, "account_deleted", None).await?;
+    RefreshTokenRepo::revoke_all_for_user_tx(&mut tx, user_id, None).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "account_deleted",
+        Some(user_id),
+        None,
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    Ok("Account scheduled for deletion.".to_string())
+}
+
+pub async fn request_restore(state: &AppState, ip: &str, email_raw: &str) -> AppResult<String> {
+    let email = normalize_email(email_raw);
+    state
+        .rate_limiter
+        .check_and_incr("restore_request", "ip", ip, 10, 3600)
+        .await?;
+
+    let user_repo = UserRepo::new(&state.db);
+    let Some((user, email_row)) = user_repo.find_by_email(&email).await? else {
+        return Ok(NEUTRAL_RESTORE_MSG.to_string());
+    };
+
+    if user.status != "deleted" {
+        return Ok(NEUTRAL_RESTORE_MSG.to_string());
+    }
+
+    let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
+    TokenRepo::revoke_active_for_user_purpose_tx(&mut tx, user.id, "account_restore").await?;
+
+    let token_id = Uuid::now_v7();
+    let expires_at = Utc::now() + ChronoDuration::hours(RESTORE_TTL_HOURS);
+    TokenRepo::insert_tx(
+        &mut tx,
+        token_id,
+        user.id,
+        "account_restore",
+        &email_row.email,
+        expires_at,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    Ok(NEUTRAL_RESTORE_MSG.to_string())
+}
+
+pub async fn confirm_restore(state: &AppState, ip: &str, token: &str) -> AppResult<String> {
+    let token_id = state
+        .magic_link_signer
+        .verify("account_restore", token)
+        .map_err(|_| AppError::BadRequest("invalid token".into()))?;
+
+    let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
+
+    let consumed = TokenRepo::consume_tx(&mut tx, token_id, "account_restore")
+        .await?
+        .ok_or_else(|| AppError::BadRequest("invalid token".into()))?;
+
+    UserRepo::restore_tx(&mut tx, consumed.user_id).await?;
+
+    insert_security_event_tx(
+        &mut tx,
+        "account_restored",
+        Some(consumed.user_id),
+        None,
+        Some(ip),
+        None,
+    )
+    .await?;
+
+    tx.commit().await.map_err(|_| AppError::Internal)?;
+    Ok("Account restored.".to_string())
 }

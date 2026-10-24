@@ -114,3 +114,20 @@ pub struct ChangePasswordRequest {
 pub struct ChangePasswordResponse {
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct RestoreRequestBody {
+    #[validate(email)]
+    pub email: String,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct RestoreConfirmRequest {
+    #[validate(length(min = 10, max = 512))]
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RestoreResponse {
+    pub message: String,
+}

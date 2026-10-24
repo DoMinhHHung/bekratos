@@ -469,4 +469,94 @@ impl<'a> UserRepo<'a> {
         })?;
         Ok(())
     }
+    pub async fn soft_delete_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        purge_after: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let res = sqlx::query(
+            r#"
+                UPDATE "user".users
+                SET
+                    status_before_deletion = status,
+                    status = 'deleted',
+                    deletion_requested_at = now(),
+                    purge_after = $2,
+                    updated_at = now()
+                WHERE id = $1 AND status IN ('active', 'suspended', 'pending')
+                "#,
+        )
+        .bind(user_id)
+        .bind(purge_after)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "soft delete failed");
+            AppError::Internal
+        })?;
+        if res.rows_affected() != 1 {
+            return Err(AppError::Conflict);
+        }
+        Ok(())
+    }
+
+    pub async fn restore_tx(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> AppResult<()> {
+        let res = sqlx::query(
+            r#"
+                UPDATE "user".users
+                SET
+                    status = COALESCE(status_before_deletion, 'active'),
+                    status_before_deletion = NULL,
+                    deletion_requested_at = NULL,
+                    purge_after = NULL,
+                    updated_at = now()
+                WHERE id = $1
+                  AND status = 'deleted'
+                  AND (purge_after IS NULL OR purge_after > now())
+                "#,
+        )
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "restore user failed");
+            AppError::Internal
+        })?;
+        if res.rows_affected() != 1 {
+            return Err(AppError::BadRequest("cannot restore".into()));
+        }
+        Ok(())
+    }
+
+    pub async fn hard_delete_expired(pool: &sqlx::PgPool, limit: i64) -> AppResult<u64> {
+        if limit <= 0 {
+            return Ok(0);
+        }
+
+        let res = sqlx::query(
+            r#"
+                WITH expired AS (
+                    SELECT id
+                    FROM "user".users
+                    WHERE status = 'deleted'
+                      AND purge_after IS NOT NULL
+                      AND purge_after <= now()
+                    ORDER BY purge_after
+                    LIMIT $1
+                    FOR UPDATE SKIP LOCKED
+                )
+                DELETE FROM "user".users AS users
+                USING expired
+                WHERE users.id = expired.id
+                "#,
+        )
+        .bind(limit)
+        .execute(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "hard delete expired failed");
+            AppError::Internal
+        })?;
+        Ok(res.rows_affected())
+    }
 }
