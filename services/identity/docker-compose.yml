@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bekratos
+      POSTGRES_PASSWORD: bekratos
+      POSTGRES_DB: bekratos
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bekratos -d bekratos"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  identity:
+    build:
+      context: ./services/identity
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      DATABASE_URL: "postgres://bekratos:bekratos@postgres:5432/bekratos"
+      REDIS_URL: "redis://redis:6379"
+      REQUEST_TIMEOUT_SECS: "30"
+      BODY_LIMIT_BYTES: "1048576"
+      READINESS_REQUIRE_DB: "false"
+      READINESS_REQUIRE_REDIS: "false"
+      RUST_LOG: "info"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
