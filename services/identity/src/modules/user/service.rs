@@ -8,12 +8,23 @@ use crate::modules::user::dto::{
 use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
 
-pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<ProfileResponse> {
+async fn require_active_session(state: &AppState, access_token: &str) -> AppResult<(Uuid, Uuid)> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 
-    let repo = UserRepo::new(&state.db);
-    let user = repo
+    let session = SessionRepo::new(&state.db)
+        .find_by_id(session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if session.user_id != user_id
+        || session.revoked_at.is_some()
+        || session.expires_at <= chrono::Utc::now()
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    let user = UserRepo::new(&state.db)
         .find_by_id(user_id)
         .await?
         .ok_or(AppError::Unauthorized)?;
@@ -21,22 +32,28 @@ pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<Prof
         return Err(AppError::Unauthorized);
     }
 
-    let profile = repo.find_profile(user_id).await?;
-    let (status, full_name, display_name, avatar_url) =
-        profile.unwrap_or((user.status.clone(), None, None, None));
-    let email = repo.find_primary_email(user_id).await?;
-    let username = repo.find_username(user_id).await?;
+    Ok((user_id, session_id))
+}
+
+pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<ProfileResponse> {
+    let (user_id, _) = require_active_session(state, access_token).await?;
+
+    let repo = UserRepo::new(&state.db);
+    let bundle = repo
+        .load_profile_bundle(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
 
     Ok(ProfileResponse {
         id: user_id,
-        status,
-        email,
-        username,
-        full_name,
-        display_name,
-        avatar_url,
-        locale: user.locale,
-        timezone: user.timezone,
+        status: bundle.user.status,
+        email: bundle.email,
+        username: bundle.username,
+        full_name: bundle.full_name,
+        display_name: bundle.display_name,
+        avatar_url: bundle.avatar_url,
+        locale: bundle.user.locale,
+        timezone: bundle.user.timezone,
     })
 }
 
@@ -45,8 +62,7 @@ pub async fn update_profile(
     access_token: &str,
     body: UpdateProfileRequest,
 ) -> AppResult<ProfileResponse> {
-    let claims = state.jwt_verifier.verify_access_token(access_token)?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let (user_id, _) = require_active_session(state, access_token).await?;
 
     let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
 
@@ -73,9 +89,7 @@ pub async fn update_profile(
 }
 
 pub async fn list_sessions(state: &AppState, access_token: &str) -> AppResult<SessionListResponse> {
-    let claims = state.jwt_verifier.verify_access_token(access_token)?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+    let (user_id, current_sid) = require_active_session(state, access_token).await?;
 
     let repo = SessionRepo::new(&state.db);
     let rows = repo.list_active_for_user(user_id).await?;
@@ -102,9 +116,7 @@ pub async fn revoke_session(
     access_token: &str,
     target_session_id: Uuid,
 ) -> AppResult<String> {
-    let claims = state.jwt_verifier.verify_access_token(access_token)?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+    let (user_id, current_sid) = require_active_session(state, access_token).await?;
 
     if target_session_id == current_sid {
         return Err(AppError::BadRequest(
@@ -130,9 +142,7 @@ pub async fn revoke_session(
 }
 
 pub async fn revoke_other_sessions(state: &AppState, access_token: &str) -> AppResult<String> {
-    let claims = state.jwt_verifier.verify_access_token(access_token)?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let current_sid = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+    let (user_id, current_sid) = require_active_session(state, access_token).await?;
 
     let mut tx = state.db.begin().await.map_err(|_| AppError::Internal)?;
 

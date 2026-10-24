@@ -7,6 +7,16 @@ use crate::error::{AppError, AppResult};
 
 type ProfileRow = (String, Option<String>, Option<String>, Option<String>);
 
+#[derive(Debug, Clone)]
+pub struct ProfileBundle {
+    pub user: UserRow,
+    pub full_name: Option<String>,
+    pub display_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub email: Option<String>,
+    pub username: Option<String>,
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRow {
     pub id: Uuid,
@@ -355,6 +365,75 @@ fn map_db_err(err: sqlx::Error, context: &str) -> AppError {
 }
 
 impl<'a> UserRepo<'a> {
+    pub async fn load_profile_bundle(&self, user_id: Uuid) -> AppResult<Option<ProfileBundle>> {
+        #[derive(sqlx::FromRow)]
+        struct Bundle {
+            id: Uuid,
+            status: String,
+            status_before_deletion: Option<String>,
+            locale: Option<String>,
+            timezone: Option<String>,
+            deletion_requested_at: Option<chrono::DateTime<chrono::Utc>>,
+            purge_after: Option<chrono::DateTime<chrono::Utc>>,
+            created_at: chrono::DateTime<chrono::Utc>,
+            updated_at: chrono::DateTime<chrono::Utc>,
+            full_name: Option<String>,
+            display_name: Option<String>,
+            avatar_url: Option<String>,
+            email: Option<String>,
+            username: Option<String>,
+        }
+        let row: Option<Bundle> = sqlx::query_as(
+            r#"
+            SELECT
+                u.id,
+                u.status,
+                u.status_before_deletion,
+                u.locale,
+                u.timezone,
+                u.deletion_requested_at,
+                u.purge_after,
+                u.created_at,
+                u.updated_at,
+                p.full_name,
+                p.display_name,
+                p.avatar_url,
+                e.email,
+                un.username
+            FROM "user".users u
+            LEFT JOIN "user".user_profile p ON p.user_id = u.id
+            LEFT JOIN "user".user_emails e ON e.user_id = u.id AND e.is_primary = true
+            LEFT JOIN "user".user_usernames un ON un.user_id = u.id
+            WHERE u.id = $1
+            "#,
+        )
+        .bind(user_id)
+        .fetch_optional(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "load profile bundle failed");
+            AppError::Internal
+        })?;
+        Ok(row.map(|b| ProfileBundle {
+            user: UserRow {
+                id: b.id,
+                status: b.status,
+                status_before_deletion: b.status_before_deletion,
+                locale: b.locale,
+                timezone: b.timezone,
+                deletion_requested_at: b.deletion_requested_at,
+                purge_after: b.purge_after,
+                created_at: b.created_at,
+                updated_at: b.updated_at,
+            },
+            full_name: b.full_name,
+            display_name: b.display_name,
+            avatar_url: b.avatar_url,
+            email: b.email,
+            username: b.username,
+        }))
+    }
+
     pub async fn find_profile(&self, user_id: Uuid) -> AppResult<Option<ProfileRow>> {
         let row: Option<ProfileRow> = sqlx::query_as(
             r#"

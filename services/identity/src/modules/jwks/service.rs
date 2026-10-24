@@ -90,7 +90,13 @@ pub async fn rotate_key(state: &AppState) -> AppResult<SigningKeyRow> {
 }
 
 pub fn decrypt_private_pem(encryptor: &KeyEncryptor, row: &SigningKeyRow) -> AppResult<String> {
-    let plain = encryptor.decrypt(&row.private_key_enc)?;
+    let (plain, was_legacy) = encryptor.decrypt_and_was_legacy(&row.private_key_enc)?;
+    if was_legacy {
+        tracing::warn!(
+            kid = %row.kid,
+            "decrypted signing key with legacy KEK derivation; rotate or re-encrypt when convenient"
+        );
+    }
     String::from_utf8(plain).map_err(|_| AppError::Internal)
 }
 

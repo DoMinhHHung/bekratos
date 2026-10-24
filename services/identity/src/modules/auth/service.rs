@@ -5,13 +5,32 @@ use std::sync::OnceLock;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::infra::password::dummy_verify;
+
 use crate::infra::refresh_token::{generate_opaque_token, hash_token};
 use crate::modules::credential::repo::CredentialRepo;
 use crate::modules::session::repo::{RefreshTokenRepo, SessionRepo};
 use crate::modules::token::repo::TokenRepo;
 use crate::modules::user::repo::{NewPolicyAcceptance, UserRepo};
 use crate::state::AppState;
+
+async fn with_argon_permit<T, F>(state: &AppState, f: F) -> AppResult<T>
+where
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let permit = state
+        .argon_permits
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal)?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        f()
+    })
+    .await
+    .map_err(|_| AppError::Internal)?
+}
 
 use super::dto::{LoginRequest, LoginResponse, RegisterRequest};
 
@@ -73,9 +92,7 @@ pub async fn register(state: &AppState, ip: &str, body: RegisterRequest) -> AppR
 
     let password = body.password.clone();
     let policy = state.password_policy.clone();
-    let password_hash = tokio::task::spawn_blocking(move || policy.hash(&password))
-        .await
-        .map_err(|_| AppError::Internal)??;
+    let password_hash = with_argon_permit(state, move || policy.hash(&password)).await?;
 
     let user_id = Uuid::now_v7();
     let email_id = Uuid::now_v7();
@@ -315,13 +332,23 @@ pub async fn login(
     };
 
     let Some(user) = user else {
-        dummy_verify();
+        let policy = state.password_policy.clone();
+        let _ = with_argon_permit(state, move || {
+            policy.dummy_verify();
+            Ok(())
+        })
+        .await;
         insert_security_event(state, "login_failed", None, None, Some(ip), user_agent).await;
         return Err(AppError::Unauthorized);
     };
 
     if user.status != "active" {
-        dummy_verify();
+        let policy = state.password_policy.clone();
+        let _ = with_argon_permit(state, move || {
+            policy.dummy_verify();
+            Ok(())
+        })
+        .await;
         insert_security_event(
             state,
             "login_failed",
@@ -339,9 +366,7 @@ pub async fn login(
         .ok_or(AppError::Unauthorized)?;
 
     let policy = state.password_policy.clone();
-    let password_ok = tokio::task::spawn_blocking(move || policy.verify(&password, &hash))
-        .await
-        .map_err(|_| AppError::Internal)??;
+    let password_ok = with_argon_permit(state, move || policy.verify(&password, &hash)).await?;
 
     if !password_ok {
         insert_security_event(
@@ -706,9 +731,7 @@ pub async fn reset_password(
 
     let password = new_password.to_string();
     let policy = state.password_policy.clone();
-    let new_hash = tokio::task::spawn_blocking(move || policy.hash(&password))
-        .await
-        .map_err(|_| AppError::Internal)??;
+    let new_hash = with_argon_permit(state, move || policy.hash(&password)).await?;
 
     let mut tx = state.db.begin().await.map_err(|e| {
         tracing::error!(error = %e, "begin reset-password transaction failed");
@@ -779,15 +802,79 @@ pub async fn change_password(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
 
+    state
+        .rate_limiter
+        .check_and_incr("change_password", "user", &user_id.to_string(), 5, 900)
+        .await?;
+    state
+        .rate_limiter
+        .check_and_incr("change_password", "ip", ip, 20, 900)
+        .await?;
+
     if current_password == new_password {
         return Err(AppError::BadRequest(
             "new password must differ from current password".into(),
         ));
     }
 
+    let user = UserRepo::new(&state.db)
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if user.status != "active" {
+        return Err(AppError::Unauthorized);
+    }
+
     let current = current_password.to_string();
     let new_pw = new_password.to_string();
     let policy = state.password_policy.clone();
+
+    let session = SessionRepo::new(&state.db)
+        .find_by_id(session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if session.user_id != user_id
+        || session.revoked_at.is_some()
+        || session.expires_at <= Utc::now()
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    let current_hash = CredentialRepo::find_password_hash(&state.db, user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    let current_hash_for_verify = current_hash.clone();
+    let policy_v = policy.clone();
+    let current_ok = with_argon_permit(state, move || {
+        policy_v.verify(&current, &current_hash_for_verify)
+    })
+    .await?;
+
+    if !current_ok {
+        return Err(AppError::Unauthorized);
+    }
+
+    let recent =
+        CredentialRepo::list_recent_hashes(&state.db, user_id, PASSWORD_HISTORY_LIMIT).await?;
+
+    let policy_h = policy.clone();
+    let new_pw_check = new_pw.clone();
+    let reused = with_argon_permit(state, move || {
+        for h in &recent {
+            if policy_h.verify(&new_pw_check, h).unwrap_or(false) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+    .await?;
+
+    if reused {
+        return Err(AppError::BadRequest("password was used recently".into()));
+    }
+
+    let new_hash = with_argon_permit(state, move || policy.hash(&new_pw)).await?;
 
     let mut tx = state.db.begin().await.map_err(|e| {
         tracing::error!(error = %e, "begin change-password transaction failed");
@@ -798,50 +885,19 @@ pub async fn change_password(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    if session.user_id != user_id || session.revoked_at.is_some() {
+    if session.user_id != user_id
+        || session.revoked_at.is_some()
+        || session.expires_at <= Utc::now()
+    {
         let _ = tx.rollback().await;
         return Err(AppError::Unauthorized);
     }
 
-    let current_hash = CredentialRepo::find_password_hash_tx(&mut tx, user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-
-    let policy_v = policy.clone();
-    let current_ok = tokio::task::spawn_blocking(move || policy_v.verify(&current, &current_hash))
-        .await
-        .map_err(|_| AppError::Internal)??;
-
-    if !current_ok {
+    let locked_hash = CredentialRepo::find_password_hash_tx(&mut tx, user_id).await?;
+    if locked_hash.as_deref() != Some(current_hash.as_str()) {
         let _ = tx.rollback().await;
-        dummy_verify();
         return Err(AppError::Unauthorized);
     }
-
-    let recent =
-        CredentialRepo::list_recent_hashes_tx(&mut tx, user_id, PASSWORD_HISTORY_LIMIT).await?;
-
-    let policy_h = policy.clone();
-    let new_pw_check = new_pw.clone();
-    let reused = tokio::task::spawn_blocking(move || {
-        for h in &recent {
-            if policy_h.verify(&new_pw_check, h).unwrap_or(false) {
-                return true;
-            }
-        }
-        false
-    })
-    .await
-    .map_err(|_| AppError::Internal)?;
-
-    if reused {
-        let _ = tx.rollback().await;
-        return Err(AppError::BadRequest("password was used recently".into()));
-    }
-
-    let new_hash = tokio::task::spawn_blocking(move || policy.hash(&new_pw))
-        .await
-        .map_err(|_| AppError::Internal)??;
 
     CredentialRepo::update_password_tx(&mut tx, user_id, &new_hash).await?;
 
@@ -874,6 +930,26 @@ pub async fn change_password(
 pub async fn request_delete(state: &AppState, access_token: &str, ip: &str) -> AppResult<String> {
     let claims = state.jwt_verifier.verify_access_token(access_token)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let session_id = Uuid::parse_str(&claims.sid).map_err(|_| AppError::Unauthorized)?;
+
+    let session = SessionRepo::new(&state.db)
+        .find_by_id(session_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if session.user_id != user_id
+        || session.revoked_at.is_some()
+        || session.expires_at <= Utc::now()
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    let user = UserRepo::new(&state.db)
+        .find_by_id(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+    if user.status != "active" {
+        return Err(AppError::Unauthorized);
+    }
 
     let purge_after = Utc::now() + ChronoDuration::days(PURGE_AFTER_DAYS);
 

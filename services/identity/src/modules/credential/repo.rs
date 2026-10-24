@@ -119,6 +119,31 @@ impl CredentialRepo {
         Ok(())
     }
 
+    pub async fn list_recent_hashes(
+        pool: &PgPool,
+        user_id: Uuid,
+        limit: i64,
+    ) -> AppResult<Vec<String>> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT password_hash
+            FROM credential.password_history
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(limit)
+        .fetch_all(pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, %user_id, "list password history failed");
+            AppError::Internal
+        })?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
     pub async fn list_recent_hashes_tx(
         tx: &mut Transaction<'_, Postgres>,
         user_id: Uuid,

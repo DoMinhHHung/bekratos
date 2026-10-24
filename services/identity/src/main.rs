@@ -93,6 +93,7 @@ async fn main() {
     };
 
     let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+    let mut worker_handles = Vec::new();
 
     let signer_for_worker = signer.clone();
     let worker = EmailWorker::new(
@@ -108,21 +109,21 @@ async fn main() {
         },
     );
     let shutdown_rx_email = shutdown_tx.subscribe();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         worker.run(shutdown_rx_email).await;
-    });
+    }));
 
     let purge = PurgeWorker::new(pool.clone());
     let shutdown_rx_purge = shutdown_tx.subscribe();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         purge.run(shutdown_rx_purge).await;
-    });
+    }));
 
     let reconcile = KeyReconcileWorker::new(pool.clone());
     let shutdown_rx_reconcile = shutdown_tx.subscribe();
-    tokio::spawn(async move {
+    worker_handles.push(tokio::spawn(async move {
         reconcile.run(shutdown_rx_reconcile).await;
-    });
+    }));
 
     let encryptor = match KeyEncryptor::new(&config.jwt_key_encryption_key) {
         Ok(e) => e,
@@ -162,14 +163,14 @@ async fn main() {
                 }
                 let state = AppState::new(
                     config,
-                    pool,
+                    pool.clone(),
                     redis,
                     password_policy,
                     signer,
                     jwt_signer,
                     jwt_verifier,
                 );
-                run_server(state, shutdown_tx).await;
+                run_server(state, shutdown_tx, worker_handles, pool).await;
                 return;
             }
             tracing::error!(error = %e, "failed to ensure active signing key");
@@ -225,7 +226,7 @@ async fn main() {
 
     let state = AppState::new(
         config,
-        pool,
+        pool.clone(),
         redis,
         password_policy,
         signer,
@@ -233,10 +234,15 @@ async fn main() {
         jwt_verifier,
     );
 
-    run_server(state, shutdown_tx).await;
+    run_server(state, shutdown_tx, worker_handles, pool).await;
 }
 
-async fn run_server(state: AppState, shutdown_tx: watch::Sender<bool>) {
+async fn run_server(
+    state: AppState,
+    shutdown_tx: watch::Sender<bool>,
+    worker_handles: Vec<tokio::task::JoinHandle<()>>,
+    pool: sqlx::PgPool,
+) {
     let addr = state.config.bind_addr;
     let app = build_router(state);
 
@@ -263,21 +269,43 @@ async fn run_server(state: AppState, shutdown_tx: watch::Sender<bool>) {
         tracing::error!(error = %e, "server error");
         std::process::exit(1);
     }
+
+    let grace = Duration::from_secs(25);
+    let join_workers = async {
+        for handle in worker_handles {
+            let _ = handle.await;
+        }
+    };
+    if tokio::time::timeout(grace, join_workers).await.is_err() {
+        tracing::warn!("worker shutdown grace period elapsed");
+    }
+
+    pool.close().await;
+    tracing::info!("identity service stopped");
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        match tokio::signal::ctrl_c().await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::error!(error = %e, "failed to install Ctrl+C handler");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(unix)]
     let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
-            .recv()
-            .await;
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut sig) => {
+                sig.recv().await;
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to install SIGTERM handler");
+                std::future::pending::<()>().await;
+            }
+        }
     };
 
     #[cfg(not(unix))]

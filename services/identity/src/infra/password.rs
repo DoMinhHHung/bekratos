@@ -57,7 +57,11 @@ impl PasswordPolicy {
             Ok(p) => p,
             Err(_) => return Ok(false),
         };
-        match Argon2::default().verify_password(password.as_bytes(), &parsed) {
+        let hasher = match self.hasher() {
+            Ok(h) => h,
+            Err(_) => return Ok(false),
+        };
+        match hasher.verify_password(password.as_bytes(), &parsed) {
             Ok(()) => Ok(true),
             Err(password_hash::Error::Password) => Ok(false),
             Err(_) => Ok(false),
@@ -90,8 +94,19 @@ impl PasswordPolicy {
     }
 }
 
-pub fn dummy_verify() {
-    let hash = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHRzb21lc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    let _ =
-        Argon2::default().verify_password(b"dummy-password-pad", &PasswordHash::new(hash).unwrap());
+impl PasswordPolicy {
+    pub fn dummy_verify(&self) {
+        let hash = format!(
+            "$argon2id$v=19$m={},t={},p=1$c29tZXNhbHRzb21lc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            self.memory_kib,
+            self.iterations
+        );
+        let Ok(parsed) = PasswordHash::new(&hash) else {
+            return;
+        };
+        let Ok(hasher) = self.hasher() else {
+            return;
+        };
+        let _ = hasher.verify_password(b"dummy-password-pad", &parsed);
+    }
 }

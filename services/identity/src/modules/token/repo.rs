@@ -166,6 +166,7 @@ impl<'a> TokenRepo<'a> {
                 WHERE consumed_at IS NULL
                   AND revoked_at IS NULL
                   AND expires_at > now()
+                  AND sent_at IS NULL
                   AND (lease_until IS NULL OR lease_until < now())
                   AND (next_attempt_at IS NULL OR next_attempt_at <= now())
                 ORDER BY created_at ASC

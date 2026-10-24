@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::error::{AppError, AppResult};
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Config {
     pub host: String,
     pub port: u16,
@@ -23,6 +23,7 @@ pub struct Config {
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
+    pub argon2_max_concurrent: usize,
     pub jwt_signing_key_pem: String,
     pub jwt_kid: String,
     pub jwt_issuer: String,
@@ -32,6 +33,39 @@ pub struct Config {
     pub jwks_cache_ttl_secs: u64,
     pub refresh_ttl_secs: i64,
     pub session_ttl_secs: i64,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("bind_addr", &self.bind_addr)
+            .field("database_url", &"[REDACTED]")
+            .field("redis_url", &"[REDACTED]")
+            .field("request_timeout", &self.request_timeout)
+            .field("body_limit_bytes", &self.body_limit_bytes)
+            .field("readiness_require_db", &self.readiness_require_db)
+            .field("readiness_require_redis", &self.readiness_require_redis)
+            .field("magic_link_hmac_keys", &"[REDACTED]")
+            .field("magic_link_active_kid", &self.magic_link_active_kid)
+            .field("app_public_base_url", &self.app_public_base_url)
+            .field("mail_provider", &self.mail_provider)
+            .field("mail_from", &self.mail_from)
+            .field("argon2_memory_kib", &self.argon2_memory_kib)
+            .field("argon2_iterations", &self.argon2_iterations)
+            .field("argon2_parallelism", &self.argon2_parallelism)
+            .field("jwt_signing_key_pem", &"[REDACTED]")
+            .field("jwt_kid", &self.jwt_kid)
+            .field("jwt_issuer", &self.jwt_issuer)
+            .field("jwt_audience", &self.jwt_audience)
+            .field("jwt_access_ttl_secs", &self.jwt_access_ttl_secs)
+            .field("jwt_key_encryption_key", &"[REDACTED]")
+            .field("jwks_cache_ttl_secs", &self.jwks_cache_ttl_secs)
+            .field("refresh_ttl_secs", &self.refresh_ttl_secs)
+            .field("session_ttl_secs", &self.session_ttl_secs)
+            .finish()
+    }
 }
 
 impl Config {
@@ -44,9 +78,19 @@ impl Config {
             .parse()
             .map_err(|_| AppError::config("PORT must be a valid u16"))?;
 
-        let bind_addr: SocketAddr = format!("{host}:{port}")
-            .parse()
-            .map_err(|_| AppError::config("HOST:PORT is not a valid socket address"))?;
+        let bind_addr: SocketAddr = if host.starts_with('[') {
+            format!("{host}:{port}")
+                .parse()
+                .map_err(|_| AppError::config("HOST:PORT is not a valid socket address"))?
+        } else if host.contains(':') {
+            format!("[{host}]:{port}")
+                .parse()
+                .map_err(|_| AppError::config("HOST:PORT is not a valid socket address"))?
+        } else {
+            format!("{host}:{port}")
+                .parse()
+                .map_err(|_| AppError::config("HOST:PORT is not a valid socket address"))?
+        };
 
         let database_url =
             env::var("DATABASE_URL").map_err(|_| AppError::config("DATABASE_URL is required"))?;
@@ -81,6 +125,11 @@ impl Config {
 
         let magic_link_hmac_keys = env::var("MAGIC_LINK_HMAC_KEYS")
             .map_err(|_| AppError::config("MAGIC_LINK_HMAC_KEYS is required"))?;
+        if magic_link_hmac_keys.contains("change-me") {
+            return Err(AppError::config(
+                "MAGIC_LINK_HMAC_KEYS must not use a placeholder value",
+            ));
+        }
         let magic_link_active_kid = env::var("MAGIC_LINK_ACTIVE_KID")
             .map_err(|_| AppError::config("MAGIC_LINK_ACTIVE_KID is required"))?;
         let app_public_base_url = env::var("APP_PUBLIC_BASE_URL")
@@ -103,6 +152,13 @@ impl Config {
             .unwrap_or_else(|_| "1".to_string())
             .parse()
             .map_err(|_| AppError::config("ARGON2_PARALLELISM must be u32"))?;
+        let argon2_max_concurrent: usize = env::var("ARGON2_MAX_CONCURRENT")
+            .unwrap_or_else(|_| "2".to_string())
+            .parse()
+            .map_err(|_| AppError::config("ARGON2_MAX_CONCURRENT must be usize"))?;
+        if argon2_max_concurrent == 0 {
+            return Err(AppError::config("ARGON2_MAX_CONCURRENT must be > 0"));
+        }
         let jwt_signing_key_pem = env::var("JWT_SIGNING_KEY_PEM").unwrap_or_default();
         let jwt_kid = env::var("JWT_KID").unwrap_or_else(|_| "es256-1".to_string());
         let jwt_issuer =
@@ -131,6 +187,11 @@ impl Config {
                 "JWT_KEY_ENCRYPTION_KEY must be at least 32 characters",
             ));
         }
+        if jwt_key_encryption_key.contains("change-me") {
+            return Err(AppError::config(
+                "JWT_KEY_ENCRYPTION_KEY must not use a placeholder value",
+            ));
+        }
         let jwks_cache_ttl_secs: u64 = env::var("JWKS_CACHE_TTL_SECS")
             .unwrap_or_else(|_| "60".to_string())
             .parse()
@@ -154,6 +215,7 @@ impl Config {
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
+            argon2_max_concurrent,
             jwt_signing_key_pem,
             jwt_kid,
             jwt_issuer,

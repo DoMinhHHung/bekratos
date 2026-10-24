@@ -27,7 +27,7 @@ services:
 
   identity:
     build:
-      context: ./services/identity
+      context: .
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
@@ -38,9 +38,22 @@ services:
       REDIS_URL: "redis://redis:6379"
       REQUEST_TIMEOUT_SECS: "30"
       BODY_LIMIT_BYTES: "1048576"
-      READINESS_REQUIRE_DB: "false"
-      READINESS_REQUIRE_REDIS: "false"
+      READINESS_REQUIRE_DB: "true"
+      READINESS_REQUIRE_REDIS: "true"
       RUST_LOG: "info"
+      MAGIC_LINK_HMAC_KEYS: "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      MAGIC_LINK_ACTIVE_KID: "v1"
+      APP_PUBLIC_BASE_URL: "http://localhost:8080"
+      JWT_ISSUER: "https://identity.bekratos.local"
+      JWT_AUDIENCE: "bekratos-api"
+      JWT_KEY_ENCRYPTION_KEY: "local-dev-only-kek-replace-in-prod-32b-min"
+      JWT_KID: "es256-1"
+      JWT_ACCESS_TTL_SECS: "900"
+      REFRESH_TTL_SECS: "2592000"
+      SESSION_TTL_SECS: "2592000"
+      MAIL_PROVIDER: "console"
+      MAIL_FROM: "noreply@localhost"
+      ARGON2_MAX_CONCURRENT: "2"
     depends_on:
       postgres:
         condition: service_healthy
