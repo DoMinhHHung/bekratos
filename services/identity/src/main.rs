@@ -88,10 +88,12 @@ async fn main() {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    let signer_for_worker = signer.clone();
+
     let worker = EmailWorker::new(
         pool.clone(),
         mailer,
-        signer,
+        signer_for_worker,
         EmailWorkerConfig {
             poll_interval: Duration::from_secs(5),
             batch_size: 20,
@@ -106,7 +108,7 @@ async fn main() {
     });
 
     let addr = config.bind_addr;
-    let state = AppState::new(config, pool, redis, password_policy);
+    let state = AppState::new(config, pool, redis, password_policy, signer);
     let app = build_router(state);
 
     let listener = match TcpListener::bind(addr).await {

@@ -19,3 +19,14 @@ pub struct RegisterRequest {
 pub struct RegisterResponse {
     pub message: String,
 }
+
+#[derive(Debug, Deserialize, Validate)]
+pub struct VerifyEmailRequest {
+    #[validate(length(min = 10, max = 512, message = "invalid token"))]
+    pub token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct VerifyEmailResponse {
+    pub message: String,
+}
