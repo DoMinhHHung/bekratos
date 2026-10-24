@@ -1,4 +1,4 @@
-name: Identity CI
+name: CI
 
 on:
   push:
@@ -8,19 +8,21 @@ on:
       - ".github/workflows/ci.yml"
       - "README.md"
       - "docs/**"
+      - ".gitignore"
   pull_request:
     paths:
       - "services/identity/**"
       - ".github/workflows/ci.yml"
       - "README.md"
       - "docs/**"
+      - ".gitignore"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: identity-ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -31,12 +33,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Check required documentation
+      - name: Check required documentation and workflow
         shell: bash
         run: |
           set -euo pipefail
           test -s README.md
           test -s .github/workflows/ci.yml
+          if [ -d docs ]; then
+            find docs -type f -name '*.md' | head -1 | grep -q .
+          fi
+          echo "Documentation and workflow checks passed."
 
   rust:
     name: Rust quality and tests
@@ -45,11 +51,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Detect Rust service
+      - name: Detect identity service
         id: detect
         shell: bash
         run: |
-          if [ -s Cargo.toml ]; then echo "has_manifest=true" >> "$GITHUB_OUTPUT"; else echo "has_manifest=false" >> "$GITHUB_OUTPUT"; echo "Rust checks skipped: services/identity/Cargo.toml does not exist yet."; fi
+          if [ -s services/identity/Cargo.toml ]; then
+            echo "has_manifest=true" >> "$GITHUB_OUTPUT"
+            echo "Identity Cargo.toml found; running Rust checks."
+          else
+            echo "has_manifest=false" >> "$GITHUB_OUTPUT"
+            echo "Rust checks skipped: services/identity/Cargo.toml does not exist yet."
+          fi
       - name: Install stable Rust
         if: steps.detect.outputs.has_manifest == 'true'
         uses: dtolnay/rust-toolchain@stable

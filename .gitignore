@@ -47,3 +47,6 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# --- Tooling (do not ignore migrations/ or .sqlx/) ---
+.cargo/
