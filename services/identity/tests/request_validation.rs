@@ -229,3 +229,43 @@ fn profile_name_limits_count_unicode_characters() {
     assert!(fields.contains_key("full_name"));
     assert!(fields.contains_key("display_name"));
 }
+
+#[test]
+fn profile_patch_reports_all_overlong_fields_in_one_validation_result() {
+    let request: UpdateProfileRequest = serde_json::from_value(json!({
+        "full_name": "a".repeat(121),
+        "display_name": "a".repeat(61),
+        "avatar_url": "a".repeat(513),
+        "locale": "a".repeat(17),
+        "timezone": "a".repeat(65)
+    }))
+    .unwrap();
+    let errors = request.validate().unwrap_err();
+    let fields = errors.field_errors();
+    assert_eq!(fields.len(), 5);
+    for field in [
+        "full_name",
+        "display_name",
+        "avatar_url",
+        "locale",
+        "timezone",
+    ] {
+        assert!(fields.contains_key(field), "missing error for {field}");
+    }
+}
+
+#[test]
+fn login_identifier_length_limits_count_unicode_characters() {
+    for (length, valid) in [(2, false), (3, true), (254, true), (255, false)] {
+        let request: LoginRequest = serde_json::from_value(json!({
+            "login": "界".repeat(length), "password": "password-for-tests"
+        }))
+        .unwrap();
+        let result = request.validate();
+        if valid {
+            assert!(result.is_ok(), "rejected {length} Unicode characters");
+        } else {
+            assert!(result.unwrap_err().field_errors().contains_key("login"));
+        }
+    }
+}

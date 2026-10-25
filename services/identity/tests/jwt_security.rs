@@ -410,3 +410,48 @@ async fn rejects_missing_key_ids_and_incomplete_or_wrongly_typed_claims() {
         ));
     }
 }
+
+#[tokio::test]
+async fn rejects_modified_payloads_that_retain_the_original_header_and_signature() {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
+    use serde_json::{json, Value};
+
+    let (signer, public_pem) = make_signer("payload-key", "identity", "bekratos-api");
+    let verifier = JwtVerifier::new("identity".into(), "bekratos-api".into());
+    verifier
+        .insert_key("payload-key".into(), &public_pem)
+        .await
+        .unwrap();
+    let user_id = Uuid::now_v7();
+    let session_id = Uuid::now_v7();
+    let token = signer.issue_access_token(user_id, session_id).unwrap();
+    let parts: Vec<_> = token.split('.').collect();
+    let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
+    assert!(verifier.verify_access_token(&token).is_ok());
+
+    for (field, replacement) in [
+        ("sub", json!(Uuid::now_v7().to_string())),
+        ("sid", json!(Uuid::now_v7().to_string())),
+        ("exp", json!(claims["exp"].as_i64().unwrap() + 3600)),
+    ] {
+        let mut modified = claims.clone();
+        modified[field] = replacement;
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&modified).unwrap());
+        let tampered = format!("{}.{payload}.{}", parts[0], parts[2]);
+        assert!(
+            matches!(
+                verifier.verify_access_token(&tampered),
+                Err(identity::AppError::Unauthorized)
+            ),
+            "accepted modified {field} with the original signature"
+        );
+        assert!(matches!(
+            verifier.verify_access_token_async(&tampered).await,
+            Err(identity::AppError::Unauthorized)
+        ));
+    }
+    let verified = verifier.verify_access_token(&token).unwrap();
+    assert_eq!(verified.sub, user_id.to_string());
+    assert_eq!(verified.sid, session_id.to_string());
+}
