@@ -62,6 +62,13 @@ func (s *Service) authorizeEnv(ctx context.Context, principal auth.Principal, or
 			return project.Project{}, project.Environment{}, ErrForbidden
 		}
 	}
+	o, err := s.orgRepo.GetOrganization(ctx, orgID)
+	if err != nil {
+		return project.Project{}, project.Environment{}, ErrNotFound
+	}
+	if write && o.Status != org.OrgStatusActive {
+		return project.Project{}, project.Environment{}, ErrInactive
+	}
 	p, err := s.projectRepo.GetProject(ctx, orgID, projectID)
 	if err != nil {
 		return project.Project{}, project.Environment{}, ErrNotFound
@@ -86,7 +93,7 @@ func (s *Service) ListPins(ctx context.Context, principal auth.Principal, orgID,
 	return s.repo.ListPins(ctx, envID)
 }
 
-func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64) (ResolutionPlan, error) {
+func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64, requestID string) (ResolutionPlan, error) {
 	if expectedRevision == nil {
 		return ResolutionPlan{}, ErrInvalidInput
 	}
@@ -111,7 +118,7 @@ func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, 
 		})
 	}
 	actor := principal.UserID
-	newRev, err := s.repo.ReplacePins(ctx, envID, pins, expectedRevision, &actor, &orgID)
+	newRev, err := s.repo.ReplacePins(ctx, envID, pins, expectedRevision, &actor, &orgID, requestID)
 	if err != nil {
 		if errors.Is(err, ErrConflictRevision) {
 			return ResolutionPlan{}, ErrConflictState
