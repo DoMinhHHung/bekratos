@@ -3,37 +3,55 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	Host             string
-	Port             int
-	DatabaseURL      string
-	LogLevel         string
-	BodyLimitBytes   int64
-	ReadTimeout      time.Duration
-	WriteTimeout     time.Duration
-	IdleTimeout      time.Duration
-	ShutdownTimeout  time.Duration
-	ReadinessTimeout time.Duration
-	MigrateOnStartup bool
+	Host               string
+	Port               int
+	DatabaseURL        string
+	LogLevel           string
+	BodyLimitBytes     int64
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	IdleTimeout        time.Duration
+	ShutdownTimeout    time.Duration
+	ReadinessTimeout   time.Duration
+	MigrateOnStartup   bool
+	IdentityJWKSURL    string
+	JWTIssuer          string
+	JWTAudience        string
+	JWKSCacheTTL       time.Duration
+	JWKSHTTPTimeout    time.Duration
+	JWTLeeway          time.Duration
+	MaxRevocationDelay time.Duration
 }
 
 func Load() (*Config, error) {
+	if err := loadDotEnv(); err != nil {
+		return nil, err
+	}
+
 	cfg := &Config{
-		Host:             getEnv("HOST", "0.0.0.0"),
-		Port:             8080,
-		LogLevel:         strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		BodyLimitBytes:   1 << 20,
-		ReadTimeout:      15 * time.Second,
-		WriteTimeout:     15 * time.Second,
-		IdleTimeout:      60 * time.Second,
-		ShutdownTimeout:  15 * time.Second,
-		ReadinessTimeout: 2 * time.Second,
-		MigrateOnStartup: false,
+		Host:               getEnv("HOST", "0.0.0.0"),
+		Port:               8080,
+		LogLevel:           strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		BodyLimitBytes:     1 << 20,
+		ReadTimeout:        15 * time.Second,
+		WriteTimeout:       15 * time.Second,
+		IdleTimeout:        60 * time.Second,
+		ShutdownTimeout:    15 * time.Second,
+		ReadinessTimeout:   2 * time.Second,
+		MigrateOnStartup:   false,
+		JWKSCacheTTL:       60 * time.Second,
+		JWKSHTTPTimeout:    3 * time.Second,
+		JWTLeeway:          30 * time.Second,
+		MaxRevocationDelay: 15 * time.Minute,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -50,6 +68,23 @@ func Load() (*Config, error) {
 	}
 	if !strings.HasPrefix(cfg.DatabaseURL, "postgres://") && !strings.HasPrefix(cfg.DatabaseURL, "postgresql://") {
 		return nil, fmt.Errorf("DATABASE_URL must be a postgres connection string")
+	}
+
+	cfg.IdentityJWKSURL = strings.TrimSpace(os.Getenv("IDENTITY_JWKS_URL"))
+	if cfg.IdentityJWKSURL == "" {
+		return nil, fmt.Errorf("IDENTITY_JWKS_URL is required")
+	}
+	if !strings.HasPrefix(cfg.IdentityJWKSURL, "https://") && !strings.HasPrefix(cfg.IdentityJWKSURL, "http://") {
+		return nil, fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	}
+
+	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
+	if cfg.JWTIssuer == "" {
+		return nil, fmt.Errorf("JWT_ISSUER is required")
+	}
+	cfg.JWTAudience = strings.TrimSpace(os.Getenv("JWT_AUDIENCE"))
+	if cfg.JWTAudience == "" {
+		return nil, fmt.Errorf("JWT_AUDIENCE is required")
 	}
 
 	if v := os.Getenv("BODY_LIMIT_BYTES"); v != "" {
@@ -76,6 +111,18 @@ func Load() (*Config, error) {
 	if cfg.ReadinessTimeout, err = parseDurationEnv("READINESS_TIMEOUT", cfg.ReadinessTimeout); err != nil {
 		return nil, err
 	}
+	if cfg.JWKSCacheTTL, err = parseDurationEnv("JWKS_CACHE_TTL", cfg.JWKSCacheTTL); err != nil {
+		return nil, err
+	}
+	if cfg.JWKSHTTPTimeout, err = parseDurationEnv("JWKS_HTTP_TIMEOUT", cfg.JWKSHTTPTimeout); err != nil {
+		return nil, err
+	}
+	if cfg.JWTLeeway, err = parseDurationEnv("JWT_LEEWAY", cfg.JWTLeeway); err != nil {
+		return nil, err
+	}
+	if cfg.MaxRevocationDelay, err = parseDurationEnv("MAX_REVOCATION_DELAY", cfg.MaxRevocationDelay); err != nil {
+		return nil, err
+	}
 
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
@@ -98,6 +145,33 @@ func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
 }
 
+func loadDotEnv() error {
+	if path := strings.TrimSpace(os.Getenv("ENV_FILE")); path != "" {
+		if err := godotenv.Load(path); err != nil {
+			return fmt.Errorf("failed to load ENV_FILE")
+		}
+		return nil
+	}
+
+	candidates := []string{".env"}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, ".env"),
+			filepath.Join(wd, "services", "control-plane", ".env"),
+		)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err != nil {
+			continue
+		}
+		if err := godotenv.Load(c); err != nil {
+			return fmt.Errorf("failed to load dotenv file")
+		}
+		return nil
+	}
+	return nil
+}
+
 func getEnv(key, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v
@@ -111,7 +185,7 @@ func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error)
 		return fallback, nil
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil || d <= 0 || d > 5*time.Minute {
+	if err != nil || d <= 0 || d > 24*time.Hour {
 		return 0, fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return d, nil

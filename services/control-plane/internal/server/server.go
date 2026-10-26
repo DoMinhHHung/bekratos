@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -16,7 +17,7 @@ type Server struct {
 	log        *slog.Logger
 }
 
-func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
+func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.Middleware) *Server {
 	h := NewHandlers(pool, log, cfg.ReadinessTimeout)
 
 	mux := http.NewServeMux()
@@ -28,6 +29,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger) *Server {
 	handler = AccessLog(log)(handler)
 	handler = Recover(log)(handler)
 	handler = RequestID(handler)
+
+	_ = authMW
 
 	return &Server{
 		httpServer: &http.Server{

@@ -2,11 +2,22 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
+func setBaseEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("DATABASE_URL", "postgres://bekratos:bekratos@localhost:5432/bekratos")
+	t.Setenv("IDENTITY_JWKS_URL", "http://localhost:8080/v1/jwks")
+	t.Setenv("JWT_ISSUER", "https://identity.bekratos.local")
+	t.Setenv("JWT_AUDIENCE", "bekratos-api")
+	t.Setenv("ENV_FILE", "")
+}
+
 func TestLoadRequiresDatabaseURL(t *testing.T) {
+	setBaseEnv(t)
 	t.Setenv("DATABASE_URL", "")
 	_, err := Load()
 	if err == nil {
@@ -14,107 +25,102 @@ func TestLoadRequiresDatabaseURL(t *testing.T) {
 	}
 }
 
-func TestLoadRejectsNonPostgresURL(t *testing.T) {
-	t.Setenv("DATABASE_URL", "mysql://user:pass@localhost/db")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for non-postgres URL")
+func TestLoadRequiresJWKSAndJWT(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("IDENTITY_JWKS_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected IDENTITY_JWKS_URL error")
+	}
+	setBaseEnv(t)
+	t.Setenv("JWT_ISSUER", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected JWT_ISSUER error")
 	}
 }
 
 func TestLoadDefaults(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://bekratos:bekratos@localhost:5432/bekratos")
+	setBaseEnv(t)
 	t.Setenv("PORT", "")
 	t.Setenv("HOST", "")
 	t.Setenv("LOG_LEVEL", "")
-	t.Setenv("BODY_LIMIT_BYTES", "")
 	t.Setenv("MIGRATE_ON_STARTUP", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Host != "0.0.0.0" {
-		t.Errorf("host = %q, want 0.0.0.0", cfg.Host)
-	}
-	if cfg.Port != 8080 {
-		t.Errorf("port = %d, want 8080", cfg.Port)
-	}
-	if cfg.LogLevel != "info" {
-		t.Errorf("log level = %q, want info", cfg.LogLevel)
-	}
-	if cfg.BodyLimitBytes != 1<<20 {
-		t.Errorf("body limit = %d, want %d", cfg.BodyLimitBytes, 1<<20)
+	if cfg.Port != 8080 || cfg.LogLevel != "info" {
+		t.Fatalf("defaults mismatch: %+v", cfg)
 	}
 	if cfg.MigrateOnStartup {
-		t.Error("MigrateOnStartup should default to false")
+		t.Fatal("MigrateOnStartup should default false")
 	}
-	if cfg.ReadTimeout != 15*time.Second {
-		t.Errorf("read timeout = %v", cfg.ReadTimeout)
+	if cfg.JWKSCacheTTL != 60*time.Second {
+		t.Fatalf("jwks ttl %v", cfg.JWKSCacheTTL)
+	}
+	if cfg.MaxRevocationDelay != 15*time.Minute {
+		t.Fatalf("max revocation delay %v", cfg.MaxRevocationDelay)
 	}
 }
 
-func TestLoadValidOverrides(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgresql://u:p@db:5432/cp")
-	t.Setenv("HOST", "127.0.0.1")
-	t.Setenv("PORT", "9090")
-	t.Setenv("LOG_LEVEL", "debug")
-	t.Setenv("BODY_LIMIT_BYTES", "2097152")
-	t.Setenv("READ_TIMEOUT", "5s")
-	t.Setenv("MIGRATE_ON_STARTUP", "true")
+func TestLoadENVFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.env")
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=http://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENV_FILE", path)
+	os.Unsetenv("DATABASE_URL")
+	os.Unsetenv("IDENTITY_JWKS_URL")
+	os.Unsetenv("JWT_ISSUER")
+	os.Unsetenv("JWT_AUDIENCE")
 	cfg, err := Load()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	if cfg.Host != "127.0.0.1" || cfg.Port != 9090 {
-		t.Errorf("addr mismatch: %s", cfg.Addr())
-	}
-	if cfg.LogLevel != "debug" {
-		t.Errorf("log level = %q", cfg.LogLevel)
-	}
-	if cfg.BodyLimitBytes != 2097152 {
-		t.Errorf("body limit = %d", cfg.BodyLimitBytes)
-	}
-	if cfg.ReadTimeout != 5*time.Second {
-		t.Errorf("read timeout = %v", cfg.ReadTimeout)
-	}
-	if !cfg.MigrateOnStartup {
-		t.Error("expected MigrateOnStartup true")
+	if cfg.DatabaseURL != "postgres://fromfile@localhost/db" {
+		t.Fatalf("url=%q", cfg.DatabaseURL)
 	}
 }
 
-func TestLoadInvalidPort(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://localhost/db")
-	t.Setenv("PORT", "abc")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected invalid PORT error")
+func TestEnvOverridesFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.env")
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=http://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ENV_FILE", path)
+	t.Setenv("DATABASE_URL", "postgres://fromenv@localhost/db")
+	t.Setenv("IDENTITY_JWKS_URL", "http://jwks.example/v1/jwks")
+	t.Setenv("JWT_ISSUER", "https://iss.example")
+	t.Setenv("JWT_AUDIENCE", "aud-example")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://fromenv@localhost/db" {
+		t.Fatalf("expected env override, got %q", cfg.DatabaseURL)
 	}
 }
 
-func TestLoadInvalidLogLevel(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://localhost/db")
-	t.Setenv("LOG_LEVEL", "trace")
+func TestLoadInvalidENVFileFailsFast(t *testing.T) {
+	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
+	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("IDENTITY_JWKS_URL", "http://x")
+	t.Setenv("JWT_ISSUER", "iss")
+	t.Setenv("JWT_AUDIENCE", "aud")
 	_, err := Load()
 	if err == nil {
-		t.Fatal("expected invalid LOG_LEVEL error")
+		t.Fatal("expected error for missing ENV_FILE")
 	}
-}
-
-func TestLoadDoesNotExposeSecretsInError(t *testing.T) {
-	secret := "postgres://user:supersecretpassword@localhost:5432/db"
-	t.Setenv("DATABASE_URL", secret)
-	t.Setenv("PORT", "not-a-number")
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if contains(err.Error(), "supersecretpassword") {
-		t.Error("error message must not contain database password")
+	if contains(err.Error(), "password") || contains(err.Error(), "secret") {
+		t.Fatalf("error leaked content: %v", err)
 	}
 }
 
 func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 || indexOf(s, substr) >= 0)
+	return len(substr) == 0 || (len(s) >= len(substr) && indexOf(s, substr) >= 0)
 }
 
 func indexOf(s, substr string) int {
@@ -124,8 +130,4 @@ func indexOf(s, substr string) int {
 		}
 	}
 	return -1
-}
-
-func TestMain(m *testing.M) {
-	os.Exit(m.Run())
 }

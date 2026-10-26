@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/db"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/server"
@@ -20,6 +21,10 @@ func main() {
 	}
 
 	log := newLogger(cfg.LogLevel)
+	log.Info("revocation model",
+		"mode", "token-expiry-bounded",
+		"max_revocation_delay", cfg.MaxRevocationDelay.String(),
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -40,7 +45,11 @@ func main() {
 		log.Info("migrations applied")
 	}
 
-	srv := server.New(cfg, pool, log)
+	jwks := auth.NewJWKSProvider(cfg.IdentityJWKSURL, cfg.JWKSCacheTTL, cfg.JWKSHTTPTimeout)
+	validator := auth.NewValidator(jwks, cfg.JWTIssuer, cfg.JWTAudience, cfg.JWTLeeway)
+	authMW := auth.NewMiddleware(validator, log)
+
+	srv := server.New(cfg, pool, log, authMW)
 
 	errCh := make(chan error, 1)
 	go func() {
