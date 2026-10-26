@@ -14,6 +14,7 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrForbidden     = errors.New("forbidden")
 	ErrInactive      = errors.New("resource inactive")
+	ErrInvalidInput  = errors.New("invalid input")
 	ErrConflictState = errors.New("conflict")
 )
 

@@ -32,7 +32,7 @@ func TestCreateProjectWithDevEnv(t *testing.T) {
 	principal := auth.Principal{UserID: ownerID, SessionID: uuid.Must(uuid.NewV7())}
 	o, err := orgSvc.CreateOrganization(ctx, principal, org.CreateOrgInput{
 		Slug: "p4-" + ownerID.String()[24:], DisplayName: "P4",
-	})
+	}, "test-request")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestCreateProjectWithDevEnv(t *testing.T) {
 
 	otherOrg, err := orgSvc.CreateOrganization(ctx, principal, org.CreateOrgInput{
 		Slug: "p4b-" + ownerID.String()[24:], DisplayName: "P4B",
-	})
+	}, "test-request")
 	if err != nil {
 		t.Fatal(err)
 	}

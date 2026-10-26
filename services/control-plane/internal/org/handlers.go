@@ -69,7 +69,8 @@ func (h *Handlers) createOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	org, err := h.svc.CreateOrganization(r.Context(), principal, CreateOrgInput{
-		Slug: req.Slug, DisplayName: req.DisplayName,
+		Slug:        req.Slug,
+		DisplayName: req.DisplayName,
 	}, requestid.FromContext(r.Context()))
 	if err != nil {
 		mapErr(w, err)

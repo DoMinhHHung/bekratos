@@ -32,15 +32,15 @@ func TestCreateAndLastOwner(t *testing.T) {
 
 	org, err := svc.CreateOrganization(ctx, principal, CreateOrgInput{
 		Slug: "acme-" + ownerID.String()[24:], DisplayName: "Acme",
-	})
+	}, "test-request")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	if err := svc.RemoveMember(ctx, principal, org.ID, ownerID); err != ErrLastOwner {
+	if err := svc.RemoveMember(ctx, principal, org.ID, ownerID, "test-request"); err != ErrLastOwner {
 		t.Fatalf("expected last owner error, got %v", err)
 	}
-	if err := svc.ChangeMemberRole(ctx, principal, org.ID, ownerID, RoleAdmin); err != ErrLastOwner {
+	if err := svc.ChangeMemberRole(ctx, principal, org.ID, ownerID, RoleAdmin, "test-request"); err != ErrLastOwner {
 		t.Fatalf("expected last owner demote error, got %v", err)
 	}
 
@@ -79,11 +79,11 @@ func TestArchiveRequiresOwner(t *testing.T) {
 	principal := auth.Principal{UserID: ownerID, SessionID: uuid.Must(uuid.NewV7())}
 	org, err := svc.CreateOrganization(ctx, principal, CreateOrgInput{
 		Slug: "arc-" + ownerID.String()[24:], DisplayName: "Arc",
-	})
+	}, "test-request")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ArchiveOrganization(ctx, principal, org.ID); err != nil {
+	if err := svc.ArchiveOrganization(ctx, principal, org.ID, "test-request"); err != nil {
 		t.Fatalf("owner archive: %v", err)
 	}
 }
