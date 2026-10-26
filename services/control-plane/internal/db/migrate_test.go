@@ -7,10 +7,7 @@ import (
 	"time"
 )
 
-func TestMigrateSkipsWithoutDatabaseURL(t *testing.T) {
-	if os.Getenv("DATABASE_URL_TEST") != "" {
-		t.Skip("DATABASE_URL_TEST is set; full integration covered separately")
-	}
+func TestMigrateNilPool(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err := Migrate(ctx, nil)
@@ -32,5 +29,41 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	}
 	if files[0].sql == "" {
 		t.Error("migration SQL is empty")
+	}
+}
+
+func TestMigrateAndPingIntegration(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL_TEST")
+	if dsn == "" {
+		t.Skip("DATABASE_URL_TEST not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	pool, err := NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatalf("NewPool: %v", err)
+	}
+	defer pool.Close()
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("Migrate idempotent second run: %v", err)
+	}
+
+	var version int64
+	if err := pool.QueryRow(ctx, `SELECT version FROM schema_migrations WHERE version = 1`).Scan(&version); err != nil {
+		t.Fatalf("schema_migrations row: %v", err)
+	}
+	if version != 1 {
+		t.Fatalf("version = %d, want 1", version)
+	}
+
+	if err := Ping(ctx, pool, 2*time.Second); err != nil {
+		t.Fatalf("Ping after migrate: %v", err)
 	}
 }
