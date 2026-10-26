@@ -53,4 +53,5 @@ type ResolvedRelease struct {
 
 type ResolutionPlan struct {
 	Releases []ResolvedRelease `json:"releases"`
+	Revision int64             `json:"revision,omitempty"`
 }

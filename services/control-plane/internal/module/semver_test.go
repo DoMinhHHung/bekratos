@@ -2,38 +2,40 @@ package module
 
 import "testing"
 
-func TestParseAndCompare(t *testing.T) {
-	a, err := ParseVersion("1.2.3")
-	if err != nil {
+func TestStrictSemVer(t *testing.T) {
+	if _, err := ParseVersion("1.2.3"); err != nil {
 		t.Fatal(err)
 	}
-	b, err := ParseVersion("1.2.4")
+	if _, err := ParseVersion("01.2.3"); err == nil {
+		t.Fatal("leading zero must fail")
+	}
+	if _, err := ParseVersion("1.2"); err == nil {
+		t.Fatal("incomplete must fail")
+	}
+	a, _ := ParseVersion("1.0.0-alpha.1")
+	b, _ := ParseVersion("1.0.0-alpha.2")
+	c, _ := ParseVersion("1.0.0")
+	if CompareVersions(a, b) >= 0 || CompareVersions(b, c) >= 0 {
+		t.Fatal("prerelease ordering")
+	}
+	_, err := ParseVersion("1.0.0+build.1")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if Compare(a, b) >= 0 {
-		t.Fatal("expected a < b")
-	}
-	c, err := ParseConstraint("^1.2.0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !c.SatisfiedBy(a) || c.SatisfiedBy(mustVer("2.0.0")) {
-		t.Fatal("caret constraint")
-	}
-	g, err := ParseConstraint(">=1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !g.SatisfiedBy(b) || g.SatisfiedBy(mustVer("1.2.2")) {
-		t.Fatal("gte constraint")
+		t.Fatal("build metadata should parse")
 	}
 }
 
-func mustVer(s string) Version {
-	v, err := ParseVersion(s)
+func TestCaretZero(t *testing.T) {
+	c, err := ParseConstraint("^0.2.3")
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
-	return v
+	v23, _ := ParseVersion("0.2.3")
+	v24, _ := ParseVersion("0.2.9")
+	v30, _ := ParseVersion("0.3.0")
+	if !ConstraintSatisfied(c, v23) || !ConstraintSatisfied(c, v24) {
+		t.Fatal("0.2.x should match")
+	}
+	if ConstraintSatisfied(c, v30) {
+		t.Fatal("^0.2.3 must not admit 0.3.0")
+	}
 }

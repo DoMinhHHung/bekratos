@@ -143,8 +143,12 @@ func (s *Service) CreateEnvironment(ctx context.Context, principal auth.Principa
 	if !m.Role.CanCreateEnvironment() {
 		return Environment{}, ErrForbidden
 	}
-	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
+	proj, err := s.repo.GetProject(ctx, orgID, projectID)
+	if err != nil {
 		return Environment{}, err
+	}
+	if proj.Status != StatusActive {
+		return Environment{}, ErrForbidden
 	}
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
 	if !slugPattern.MatchString(slug) {

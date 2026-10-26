@@ -72,6 +72,7 @@ type resolveRequest struct {
 		ModuleSlug string `json:"module_slug"`
 		Version    string `json:"version"`
 	} `json:"selections"`
+	ExpectedRevision *int64 `json:"expected_revision"`
 }
 
 func (h *Handlers) resolve(w http.ResponseWriter, r *http.Request) {
@@ -103,7 +104,7 @@ func (h *Handlers) listPins(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	pins, err := h.svc.ListPins(r.Context(), principal, orgID, projectID, envID)
+	pins, rev, err := h.svc.ListPins(r.Context(), principal, orgID, projectID, envID)
 	if err != nil {
 		mapErr(w, err)
 		return
@@ -115,7 +116,7 @@ func (h *Handlers) listPins(w http.ResponseWriter, r *http.Request) {
 			"pinned_at": p.PinnedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+	writeJSON(w, http.StatusOK, map[string]any{"items": out, "revision": rev})
 }
 
 func (h *Handlers) setPins(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +139,7 @@ func (h *Handlers) setPins(w http.ResponseWriter, r *http.Request) {
 	for _, s := range req.Selections {
 		sels = append(sels, Selection{ModuleSlug: s.ModuleSlug, Version: s.Version})
 	}
-	plan, err := h.svc.SetPins(r.Context(), principal, orgID, projectID, envID, sels)
+	plan, err := h.svc.SetPins(r.Context(), principal, orgID, projectID, envID, sels, req.ExpectedRevision)
 	if err != nil {
 		mapErr(w, err)
 		return
@@ -175,13 +176,17 @@ func mapErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 	case errors.Is(err, ErrForbidden):
 		writeErr(w, http.StatusForbidden, "forbidden", "forbidden")
+	case errors.Is(err, ErrInactive):
+		writeErr(w, http.StatusConflict, "inactive", "project or environment is not active")
+	case errors.Is(err, ErrConflictState), errors.Is(err, ErrConflictRevision):
+		writeErr(w, http.StatusConflict, "revision_conflict", "pin revision conflict")
 	case errors.Is(err, ErrCycle):
 		writeErr(w, http.StatusConflict, "dependency_cycle", "dependency cycle")
 	case errors.Is(err, ErrConflict):
 		writeErr(w, http.StatusConflict, "module_conflict", "module conflict")
 	case errors.Is(err, ErrMissingDependency), errors.Is(err, ErrUnknownModule), errors.Is(err, ErrUnknownRelease):
 		writeErr(w, http.StatusBadRequest, "missing_dependency", "missing or unknown dependency")
-	case errors.Is(err, ErrUnsatisfiable):
+	case errors.Is(err, ErrUnsatisfiable), errors.Is(err, ErrIncompatible), errors.Is(err, ErrDuplicateRelease):
 		writeErr(w, http.StatusConflict, "unsatisfiable", "unsatisfiable constraint")
 	default:
 		writeErr(w, http.StatusInternalServerError, "internal_error", "internal server error")
