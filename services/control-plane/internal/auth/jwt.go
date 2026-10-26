@@ -12,26 +12,30 @@ import (
 
 type Claims struct {
 	jwt.RegisteredClaims
-	// sid is carried as a custom claim matching Identity AccessClaims.sid
 	SessionID string `json:"sid"`
 }
 
 type Validator struct {
-	provider *JWKSProvider
-	issuer   string
-	audience string
-	leeway   time.Duration
+	provider    *JWKSProvider
+	issuer      string
+	audience    string
+	leeway      time.Duration
+	maxTokenTTL time.Duration
 }
 
-func NewValidator(provider *JWKSProvider, issuer, audience string, leeway time.Duration) *Validator {
+func NewValidator(provider *JWKSProvider, issuer, audience string, leeway, maxTokenTTL time.Duration) *Validator {
 	if leeway <= 0 {
 		leeway = 30 * time.Second
 	}
+	if maxTokenTTL <= 0 {
+		maxTokenTTL = 15 * time.Minute
+	}
 	return &Validator{
-		provider: provider,
-		issuer:   issuer,
-		audience: audience,
-		leeway:   leeway,
+		provider:    provider,
+		issuer:      issuer,
+		audience:    audience,
+		leeway:      leeway,
+		maxTokenTTL: maxTokenTTL,
 	}
 }
 
@@ -65,10 +69,16 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 	if claims.SessionID == "" {
 		return Principal{}, fmt.Errorf("missing sid")
 	}
-	if claims.NotBefore != nil {
-		if err := jwt.NewValidator(jwt.WithLeeway(v.leeway)).Validate(claims); err != nil {
-			return Principal{}, fmt.Errorf("invalid token")
-		}
+	if claims.IssuedAt == nil {
+		return Principal{}, fmt.Errorf("missing iat")
+	}
+	if claims.ExpiresAt == nil {
+		return Principal{}, fmt.Errorf("missing exp")
+	}
+
+	lifetime := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
+	if lifetime <= 0 || lifetime > v.maxTokenTTL+v.leeway {
+		return Principal{}, fmt.Errorf("token lifetime exceeds maximum")
 	}
 
 	userID, err := uuid.Parse(claims.Subject)
@@ -80,17 +90,12 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 		return Principal{}, fmt.Errorf("invalid sid")
 	}
 
-	var exp int64
-	if claims.ExpiresAt != nil {
-		exp = claims.ExpiresAt.Unix()
-	}
-
 	return Principal{
 		UserID:    userID,
 		SessionID: sessionID,
 		Issuer:    v.issuer,
 		Audience:  v.audience,
-		ExpiresAt: exp,
+		ExpiresAt: claims.ExpiresAt.Unix(),
 	}, nil
 }
 

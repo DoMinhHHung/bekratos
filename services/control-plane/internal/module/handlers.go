@@ -157,7 +157,13 @@ func parseScope(r *http.Request) (uuid.UUID, uuid.UUID, uuid.UUID, bool) {
 func decodeJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if dec.More() {
+		return errors.New("trailing json")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -176,6 +182,8 @@ func mapErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 	case errors.Is(err, ErrForbidden):
 		writeErr(w, http.StatusForbidden, "forbidden", "forbidden")
+	case errors.Is(err, ErrInvalidInput):
+		writeErr(w, http.StatusBadRequest, "invalid_input", "invalid input")
 	case errors.Is(err, ErrInactive):
 		writeErr(w, http.StatusConflict, "inactive", "project or environment is not active")
 	case errors.Is(err, ErrConflictState), errors.Is(err, ErrConflictRevision):

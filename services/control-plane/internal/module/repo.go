@@ -62,19 +62,66 @@ func (r *Repository) ListReleases(ctx context.Context, moduleSlug string) ([]Rel
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for i := range out {
-		deps, err := r.loadDeps(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Dependencies = deps
-		conflicts, err := r.loadConflicts(ctx, out[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		out[i].Conflicts = conflicts
+	if err := r.attachDepsAndConflicts(ctx, out); err != nil {
+		return nil, err
 	}
 	return out, nil
+}
+
+func (r *Repository) attachDepsAndConflicts(ctx context.Context, releases []Release) error {
+	if len(releases) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(releases))
+	index := make(map[uuid.UUID]int, len(releases))
+	for i, rel := range releases {
+		ids[i] = rel.ID
+		index[rel.ID] = i
+		releases[i].Dependencies = nil
+		releases[i].Conflicts = nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT release_id, dep_module_slug, version_constraint, required
+		FROM module_release_dependencies
+		WHERE release_id = ANY($1)
+		ORDER BY release_id, dep_module_slug`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var d Dependency
+		if err := rows.Scan(&id, &d.ModuleSlug, &d.VersionConstraint, &d.Required); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			releases[i].Dependencies = append(releases[i].Dependencies, d)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	crows, err := r.pool.Query(ctx, `
+		SELECT release_id, conflict_module_slug
+		FROM module_release_conflicts
+		WHERE release_id = ANY($1)
+		ORDER BY release_id, conflict_module_slug`, ids)
+	if err != nil {
+		return err
+	}
+	defer crows.Close()
+	for crows.Next() {
+		var id uuid.UUID
+		var slug string
+		if err := crows.Scan(&id, &slug); err != nil {
+			return err
+		}
+		if i, ok := index[id]; ok {
+			releases[i].Conflicts = append(releases[i].Conflicts, slug)
+		}
+	}
+	return crows.Err()
 }
 
 func (r *Repository) loadDeps(ctx context.Context, releaseID uuid.UUID) ([]Dependency, error) {
@@ -158,24 +205,18 @@ func (r *Repository) ReplacePins(ctx context.Context, envID uuid.UUID, pins []Pi
 	defer tx.Rollback(ctx)
 
 	var rev int64
+	_, err = tx.Exec(ctx, `
+		INSERT INTO environment_module_pin_state (environment_id, revision, updated_at)
+		VALUES ($1, 0, now())
+		ON CONFLICT (environment_id) DO NOTHING`, envID)
+	if err != nil {
+		return 0, err
+	}
 	err = tx.QueryRow(ctx, `
 		SELECT revision FROM environment_module_pin_state
 		WHERE environment_id = $1 FOR UPDATE`, envID,
 	).Scan(&rev)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO environment_module_pin_state (environment_id, revision, updated_at)
-			VALUES ($1, 0, now())`, envID); err != nil {
-			return 0, err
-		}
-		rev = 0
-		if err := tx.QueryRow(ctx, `
-			SELECT revision FROM environment_module_pin_state
-			WHERE environment_id = $1 FOR UPDATE`, envID,
-		).Scan(&rev); err != nil {
-			return 0, err
-		}
-	} else if err != nil {
+	if err != nil {
 		return 0, err
 	}
 
@@ -183,7 +224,10 @@ func (r *Repository) ReplacePins(ctx context.Context, envID uuid.UUID, pins []Pi
 		return 0, ErrConflictRevision
 	}
 
-	before, _ := r.listPinsTx(ctx, tx, envID)
+	before, err := r.listPinsTx(ctx, tx, envID)
+	if err != nil {
+		return 0, err
+	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM environment_module_pins WHERE environment_id = $1`, envID); err != nil {
 		return 0, err

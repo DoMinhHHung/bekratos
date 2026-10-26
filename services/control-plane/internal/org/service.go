@@ -22,7 +22,7 @@ func NewService(repo *Repository) *Service {
 	return &Service{repo: repo}
 }
 
-func (s *Service) CreateOrganization(ctx context.Context, principal auth.Principal, in CreateOrgInput) (Organization, error) {
+func (s *Service) CreateOrganization(ctx context.Context, principal auth.Principal, in CreateOrgInput, requestID string) (Organization, error) {
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
 	name := strings.TrimSpace(in.DisplayName)
 	if !slugPattern.MatchString(slug) {
@@ -42,12 +42,10 @@ func (s *Service) CreateOrganization(ctx context.Context, principal auth.Princip
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
-	if err := s.repo.CreateOrganizationWithOwner(ctx, org, principal.UserID); err != nil {
+	meta, _ := json.Marshal(map[string]any{"slug": org.Slug})
+	if err := s.repo.CreateOrganizationWithOwner(ctx, org, principal.UserID, principal.UserID, requestID, meta); err != nil {
 		return Organization{}, err
 	}
-	_ = s.audit(ctx, &principal.UserID, &org.ID, "organization.created", "organization", org.ID.String(), map[string]any{
-		"slug": org.Slug,
-	})
 	return org, nil
 }
 
@@ -67,19 +65,8 @@ func (s *Service) GetOrganization(ctx context.Context, principal auth.Principal,
 	return org, m, nil
 }
 
-func (s *Service) ArchiveOrganization(ctx context.Context, principal auth.Principal, orgID uuid.UUID) error {
-	m, err := s.repo.GetActiveMembership(ctx, orgID, principal.UserID)
-	if err != nil {
-		return ErrNotFound
-	}
-	if !m.Role.CanArchiveOrg() {
-		return ErrForbidden
-	}
-	if err := s.repo.ArchiveOrganization(ctx, orgID); err != nil {
-		return err
-	}
-	_ = s.audit(ctx, &principal.UserID, &orgID, "organization.archived", "organization", orgID.String(), nil)
-	return nil
+func (s *Service) ArchiveOrganization(ctx context.Context, principal auth.Principal, orgID uuid.UUID, requestID string) error {
+	return s.repo.ArchiveOrganizationAtomic(ctx, orgID, principal.UserID, requestID)
 }
 
 func (s *Service) ListMembers(ctx context.Context, principal auth.Principal, orgID uuid.UUID) ([]Membership, error) {
@@ -90,69 +77,20 @@ func (s *Service) ListMembers(ctx context.Context, principal auth.Principal, org
 	if !m.Role.CanListMembers() {
 		return nil, ErrForbidden
 	}
+	org, err := s.repo.GetOrganization(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	if org.Status == OrgStatusArchived {
+		return nil, ErrNotFound
+	}
 	return s.repo.ListMembers(ctx, orgID)
 }
 
-func (s *Service) ChangeMemberRole(ctx context.Context, principal auth.Principal, orgID, targetUserID uuid.UUID, newRole Role) error {
-	actor, err := s.repo.GetActiveMembership(ctx, orgID, principal.UserID)
-	if err != nil {
-		return ErrNotFound
-	}
-	if !actor.Role.CanManageMembers() {
-		return ErrForbidden
-	}
-	if !actor.Role.CanAssignRole(newRole) {
-		return ErrForbidden
-	}
-
-	target, err := s.repo.GetActiveMembership(ctx, orgID, targetUserID)
-	if err != nil {
-		return ErrNotFound
-	}
-	if !actor.Role.CanModifyMember(target.Role) {
-		return ErrForbidden
-	}
-
-	if err := s.repo.ChangeMemberRole(ctx, orgID, targetUserID, newRole); err != nil {
-		return err
-	}
-	_ = s.audit(ctx, &principal.UserID, &orgID, "membership.role_changed", "membership", targetUserID.String(), map[string]any{
-		"from": string(target.Role),
-		"to":   string(newRole),
-	})
-	return nil
+func (s *Service) ChangeMemberRole(ctx context.Context, principal auth.Principal, orgID, targetUserID uuid.UUID, newRole Role, requestID string) error {
+	return s.repo.ChangeMemberRoleAtomic(ctx, orgID, principal.UserID, targetUserID, newRole, requestID)
 }
 
-func (s *Service) RemoveMember(ctx context.Context, principal auth.Principal, orgID, targetUserID uuid.UUID) error {
-	actor, err := s.repo.GetActiveMembership(ctx, orgID, principal.UserID)
-	if err != nil {
-		return ErrNotFound
-	}
-	if !actor.Role.CanManageMembers() {
-		return ErrForbidden
-	}
-
-	target, err := s.repo.GetActiveMembership(ctx, orgID, targetUserID)
-	if err != nil {
-		return ErrNotFound
-	}
-	if !actor.Role.CanModifyMember(target.Role) {
-		return ErrForbidden
-	}
-
-	if err := s.repo.RemoveMember(ctx, orgID, targetUserID); err != nil {
-		return err
-	}
-	_ = s.audit(ctx, &principal.UserID, &orgID, "membership.removed", "membership", targetUserID.String(), map[string]any{
-		"role": string(target.Role),
-	})
-	return nil
-}
-
-func (s *Service) audit(ctx context.Context, actor, orgID *uuid.UUID, eventType, targetType, targetID string, meta map[string]any) error {
-	var raw []byte
-	if meta != nil {
-		raw, _ = json.Marshal(meta)
-	}
-	return s.repo.InsertAudit(ctx, uuid.Must(uuid.NewV7()), actor, orgID, eventType, targetType, targetID, "", raw)
+func (s *Service) RemoveMember(ctx context.Context, principal auth.Principal, orgID, targetUserID uuid.UUID, requestID string) error {
+	return s.repo.RemoveMemberAtomic(ctx, orgID, principal.UserID, targetUserID, requestID)
 }

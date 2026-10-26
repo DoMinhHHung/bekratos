@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 const maxJWKSBytes = 1 << 20
@@ -33,12 +34,17 @@ type jwksDocument struct {
 }
 
 type JWKSProvider struct {
-	url        string
-	httpClient *http.Client
-	ttl        time.Duration
-	mu         sync.RWMutex
-	keys       map[string]*ecdsa.PublicKey
-	fetchedAt  time.Time
+	url            string
+	httpClient     *http.Client
+	ttl            time.Duration
+	staleTTL       time.Duration
+	refreshCD      time.Duration
+	mu             sync.RWMutex
+	keys           map[string]*ecdsa.PublicKey
+	fetchedAt      time.Time
+	lastRefreshAt  time.Time
+	lastRefreshErr error
+	sf             singleflight.Group
 }
 
 func NewJWKSProvider(url string, ttl, timeout time.Duration) *JWKSProvider {
@@ -53,8 +59,10 @@ func NewJWKSProvider(url string, ttl, timeout time.Duration) *JWKSProvider {
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		ttl:  ttl,
-		keys: make(map[string]*ecdsa.PublicKey),
+		ttl:       ttl,
+		staleTTL:  ttl * 3,
+		refreshCD: 5 * time.Second,
+		keys:      make(map[string]*ecdsa.PublicKey),
 	}
 }
 
@@ -79,16 +87,21 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 	p.mu.RLock()
 	key, ok := p.keys[kid]
 	fresh := !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < p.ttl
+	staleOK := ok && !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < p.staleTTL
 	p.mu.RUnlock()
+
 	if ok && fresh {
 		return key, nil
 	}
 
-	if err := p.refresh(ctx); err != nil {
-		if ok {
-			return key, nil
+	needRefresh := !ok || !fresh
+	if needRefresh {
+		if err := p.refreshSerialized(ctx); err != nil {
+			if staleOK {
+				return key, nil
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 
 	p.mu.RLock()
@@ -97,7 +110,40 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 	if !ok {
 		return nil, fmt.Errorf("unknown kid")
 	}
+	if p.fetchedAt.IsZero() || time.Since(p.fetchedAt) >= p.staleTTL {
+		return nil, fmt.Errorf("jwks stale")
+	}
 	return key, nil
+}
+
+func (p *JWKSProvider) refreshSerialized(ctx context.Context) error {
+	p.mu.RLock()
+	cdActive := !p.lastRefreshAt.IsZero() && time.Since(p.lastRefreshAt) < p.refreshCD
+	lastErr := p.lastRefreshErr
+	p.mu.RUnlock()
+	if cdActive {
+		if lastErr != nil {
+			return lastErr
+		}
+		return nil
+	}
+
+	_, err, _ := p.sf.Do("jwks", func() (any, error) {
+		p.mu.RLock()
+		if !p.lastRefreshAt.IsZero() && time.Since(p.lastRefreshAt) < p.refreshCD {
+			err := p.lastRefreshErr
+			p.mu.RUnlock()
+			return nil, err
+		}
+		p.mu.RUnlock()
+		err := p.refresh(ctx)
+		p.mu.Lock()
+		p.lastRefreshAt = time.Now()
+		p.lastRefreshErr = err
+		p.mu.Unlock()
+		return nil, err
+	})
+	return err
 }
 
 func (p *JWKSProvider) refresh(ctx context.Context) error {
@@ -135,12 +181,18 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 		if k.Alg != "" && k.Alg != "ES256" {
 			continue
 		}
+		if k.Use != "" && k.Use != "sig" {
+			continue
+		}
 		if k.Kid == "" || k.X == "" || k.Y == "" {
 			continue
 		}
+		if _, dup := next[k.Kid]; dup {
+			return fmt.Errorf("jwks duplicate kid")
+		}
 		pub, err := parseECPublicKey(k.X, k.Y)
 		if err != nil {
-			continue
+			return fmt.Errorf("jwks invalid key material")
 		}
 		next[k.Kid] = pub
 	}

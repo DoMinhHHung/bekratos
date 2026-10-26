@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,10 +14,12 @@ type contextKey string
 
 const requestIDKey contextKey = "request_id"
 
+var requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Request-ID")
-		if id == "" {
+		if !requestIDPattern.MatchString(id) {
 			id = uuid.NewString()
 		}
 		w.Header().Set("X-Request-ID", id)

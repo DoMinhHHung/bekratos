@@ -86,6 +86,9 @@ func (s *Service) ListPins(ctx context.Context, principal auth.Principal, orgID,
 }
 
 func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64) (ResolutionPlan, error) {
+	if expectedRevision == nil {
+		return ResolutionPlan{}, ErrInvalidInput
+	}
 	if _, _, err := s.authorizeEnv(ctx, principal, orgID, projectID, envID, true); err != nil {
 		return ResolutionPlan{}, err
 	}
