@@ -3,6 +3,7 @@ package org
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -241,7 +242,14 @@ func toOrgResponse(o Organization, role Role) orgResponse {
 func decodeJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("trailing json")
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
