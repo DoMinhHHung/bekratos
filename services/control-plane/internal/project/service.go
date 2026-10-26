@@ -28,7 +28,25 @@ func (s *Service) requireMembership(ctx context.Context, orgID, userID uuid.UUID
 	if err != nil {
 		return org.Membership{}, ErrNotFound
 	}
+	o, err := s.orgRepo.GetOrganization(ctx, orgID)
+	if err != nil {
+		return org.Membership{}, ErrNotFound
+	}
+	if o.Status == org.OrgStatusArchived {
+		return org.Membership{}, ErrNotFound
+	}
 	return m, nil
+}
+
+func (s *Service) requireActiveOrg(ctx context.Context, orgID uuid.UUID) error {
+	o, err := s.orgRepo.GetOrganization(ctx, orgID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if o.Status != org.OrgStatusActive {
+		return ErrForbidden
+	}
+	return nil
 }
 
 func (s *Service) CreateProject(ctx context.Context, principal auth.Principal, orgID uuid.UUID, in CreateProjectInput) (Project, Environment, error) {
@@ -38,6 +56,9 @@ func (s *Service) CreateProject(ctx context.Context, principal auth.Principal, o
 	}
 	if !m.Role.CanCreateProject() {
 		return Project{}, Environment{}, ErrForbidden
+	}
+	if err := s.requireActiveOrg(ctx, orgID); err != nil {
+		return Project{}, Environment{}, err
 	}
 
 	slug := strings.ToLower(strings.TrimSpace(in.Slug))
@@ -107,6 +128,9 @@ func (s *Service) UpdateProject(ctx context.Context, principal auth.Principal, o
 	if !m.Role.CanUpdateProject() {
 		return Project{}, ErrForbidden
 	}
+	if err := s.requireActiveOrg(ctx, orgID); err != nil {
+		return Project{}, err
+	}
 	if in.DisplayName != nil {
 		n := strings.TrimSpace(*in.DisplayName)
 		if n == "" || utf8.RuneCountInString(n) > 120 {
@@ -132,6 +156,9 @@ func (s *Service) ArchiveProject(ctx context.Context, principal auth.Principal, 
 	if !m.Role.CanArchiveProject() {
 		return ErrForbidden
 	}
+	if err := s.requireActiveOrg(ctx, orgID); err != nil {
+		return err
+	}
 	return s.repo.ArchiveProject(ctx, orgID, projectID)
 }
 
@@ -142,6 +169,9 @@ func (s *Service) CreateEnvironment(ctx context.Context, principal auth.Principa
 	}
 	if !m.Role.CanCreateEnvironment() {
 		return Environment{}, ErrForbidden
+	}
+	if err := s.requireActiveOrg(ctx, orgID); err != nil {
+		return Environment{}, err
 	}
 	proj, err := s.repo.GetProject(ctx, orgID, projectID)
 	if err != nil {
@@ -210,6 +240,9 @@ func (s *Service) ArchiveEnvironment(ctx context.Context, principal auth.Princip
 	}
 	if !m.Role.CanArchiveEnvironment() {
 		return ErrForbidden
+	}
+	if err := s.requireActiveOrg(ctx, orgID); err != nil {
+		return err
 	}
 	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
 		return err
