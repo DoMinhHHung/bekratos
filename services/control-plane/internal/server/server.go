@@ -9,6 +9,7 @@ import (
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,18 +20,20 @@ type Server struct {
 
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.Middleware) *Server {
 	h := NewHandlers(pool, log, cfg.ReadinessTimeout)
+	orgRepo := org.NewRepository(pool)
+	orgSvc := org.NewService(orgRepo)
+	orgHandlers := org.NewHandlers(orgSvc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
 	mux.HandleFunc("/readyz", h.Readyz)
+	orgHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)
 	handler = AccessLog(log)(handler)
 	handler = Recover(log)(handler)
 	handler = RequestID(handler)
-
-	_ = authMW
 
 	return &Server{
 		httpServer: &http.Server{
