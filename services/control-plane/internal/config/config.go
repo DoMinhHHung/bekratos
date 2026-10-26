@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -74,8 +75,8 @@ func Load() (*Config, error) {
 	if cfg.IdentityJWKSURL == "" {
 		return nil, fmt.Errorf("IDENTITY_JWKS_URL is required")
 	}
-	if !strings.HasPrefix(cfg.IdentityJWKSURL, "https://") && !strings.HasPrefix(cfg.IdentityJWKSURL, "http://") {
-		return nil, fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	if err := validateJWKSURL(cfg.IdentityJWKSURL); err != nil {
+		return nil, err
 	}
 
 	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
@@ -177,6 +178,26 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func validateJWKSURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if loopback {
+			return nil
+		}
+		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
+	default:
+		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	}
 }
 
 func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
