@@ -50,3 +50,31 @@ func (r Role) CanModifyMember(targetRole Role) bool {
 	}
 	return false
 }
+
+func (r Role) CanCreateProject() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper
+}
+
+func (r Role) CanReadProject() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper || r == RoleViewer
+}
+
+func (r Role) CanUpdateProject() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper
+}
+
+func (r Role) CanArchiveProject() bool {
+	return r == RoleOwner || r == RoleAdmin
+}
+
+func (r Role) CanCreateEnvironment() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper
+}
+
+func (r Role) CanReadEnvironment() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper || r == RoleViewer
+}
+
+func (r Role) CanArchiveEnvironment() bool {
+	return r == RoleOwner || r == RoleAdmin
+}
