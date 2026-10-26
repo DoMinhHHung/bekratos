@@ -17,4 +17,13 @@ ignore = [
     # Track upstream; revisit when p256/jsonwebtoken pull fixed range.
     # https://rustsec.org/advisories/RUSTSEC-2026-0387
     "RUSTSEC-2026-0387",
+
+    # RUSTSEC-2025-0134 — rustls-pemfile unmaintained.
+    # Transitive only via redis 0.27.x / rustls-native-certs.
+    # Identity does not call rustls-pemfile. 2.2.0 is already a thin wrapper
+    # over rustls-pki-types PEM code; no patched version exists.
+    # Drop this ignore when redis drops the dependency (e.g. after a deliberate
+    # redis major upgrade with full regression tests).
+    # https://rustsec.org/advisories/RUSTSEC-2025-0134
+    "RUSTSEC-2025-0134",
 ]

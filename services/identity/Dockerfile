@@ -1,6 +1,4 @@
 # syntax=docker/dockerfile:1
-# Tuned for low-RAM builders (Northflank free / shared CI).
-# Peak RAM is dominated by rustc link step; we cap jobs and use thin LTO.
 
 FROM rust:1.89-bookworm AS builder
 WORKDIR /app
@@ -9,8 +7,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends pkg-config libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Serialize compilation to avoid OOM on ~1–2 GiB builders.
-# Increase to 2 if the build host has ≥4 GiB RAM.
 ENV CARGO_BUILD_JOBS=1 \
     CARGO_INCREMENTAL=0 \
     CARGO_TERM_COLOR=never \
@@ -18,7 +14,6 @@ ENV CARGO_BUILD_JOBS=1 \
 
 COPY Cargo.toml Cargo.lock ./
 
-# Warm dependency cache with a stub crate (layer reused until Cargo.* changes).
 RUN mkdir -p src \
     && printf 'fn main() {}\n' > src/main.rs \
     && printf 'pub fn placeholder() {}\n' > src/lib.rs \
@@ -30,7 +25,6 @@ RUN mkdir -p src \
 COPY src ./src
 COPY migrations ./migrations
 
-# Touch so cargo rebuilds the binary without invalidating dep cache.
 RUN touch src/main.rs src/lib.rs \
     && cargo build --release --locked \
     && strip -s target/release/identity || true

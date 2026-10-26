@@ -1,0 +1,87 @@
+name: Control Plane CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "services/control-plane/**"
+      - ".github/workflows/control-plane.yml"
+  pull_request:
+    paths:
+      - "services/control-plane/**"
+      - ".github/workflows/control-plane.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go quality and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bekratos
+          POSTGRES_PASSWORD: bekratos
+          POSTGRES_DB: control_plane_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bekratos -d control_plane_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27.x"
+          cache-dependency-path: services/control-plane/go.sum
+
+      - name: Format
+        working-directory: services/control-plane
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        working-directory: services/control-plane
+        run: go vet ./...
+
+      - name: Test
+        working-directory: services/control-plane
+        env:
+          DATABASE_URL_TEST: postgres://bekratos:bekratos@localhost:5432/control_plane_test
+        run: go test ./... -count=1
+
+      - name: Test race
+        working-directory: services/control-plane
+        env:
+          DATABASE_URL_TEST: postgres://bekratos:bekratos@localhost:5432/control_plane_test
+        run: go test -race ./... -count=1
+
+      - name: Build
+        working-directory: services/control-plane
+        run: go build -o /tmp/control-plane ./cmd/control-plane
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Vulnerability scan
+        working-directory: services/control-plane
+        run: govulncheck ./...
+
+      - name: Build container image
+        uses: docker/build-push-action@v6
+        with:
+          context: services/control-plane
+          push: false
+          tags: bekratos-control-plane:ci
