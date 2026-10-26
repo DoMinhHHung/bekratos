@@ -9,6 +9,7 @@ import (
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 	"github.com/google/uuid"
 )
 
@@ -92,7 +93,7 @@ func (s *Service) CreateProject(ctx context.Context, principal auth.Principal, o
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.repo.CreateProjectWithDevEnv(ctx, p, env); err != nil {
+	if err := s.repo.CreateProjectWithDevEnv(ctx, p, env, principal.UserID, requestid.FromContext(ctx)); err != nil {
 		return Project{}, Environment{}, err
 	}
 	return p, env, nil
@@ -159,7 +160,7 @@ func (s *Service) ArchiveProject(ctx context.Context, principal auth.Principal, 
 	if err := s.requireActiveOrg(ctx, orgID); err != nil {
 		return err
 	}
-	return s.repo.ArchiveProject(ctx, orgID, projectID)
+	return s.repo.ArchiveProject(ctx, orgID, projectID, principal.UserID, requestid.FromContext(ctx))
 }
 
 func (s *Service) CreateEnvironment(ctx context.Context, principal auth.Principal, orgID, projectID uuid.UUID, in CreateEnvironmentInput) (Environment, error) {
@@ -199,7 +200,7 @@ func (s *Service) CreateEnvironment(ctx context.Context, principal auth.Principa
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.repo.CreateEnvironment(ctx, env); err != nil {
+	if err := s.repo.CreateEnvironment(ctx, orgID, env, principal.UserID, requestid.FromContext(ctx)); err != nil {
 		return Environment{}, err
 	}
 	return env, nil
@@ -247,5 +248,5 @@ func (s *Service) ArchiveEnvironment(ctx context.Context, principal auth.Princip
 	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
 		return err
 	}
-	return s.repo.ArchiveEnvironment(ctx, projectID, envID)
+	return s.repo.ArchiveEnvironment(ctx, orgID, projectID, envID, principal.UserID, requestid.FromContext(ctx))
 }
