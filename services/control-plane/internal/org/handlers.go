@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
-	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/server"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 	"github.com/google/uuid"
 )
 
@@ -70,7 +70,7 @@ func (h *Handlers) createOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	org, err := h.svc.CreateOrganization(r.Context(), principal, CreateOrgInput{
 		Slug: req.Slug, DisplayName: req.DisplayName,
-	}, server.RequestIDFromContext(r.Context()))
+	}, requestid.FromContext(r.Context()))
 	if err != nil {
 		mapErr(w, err)
 		return
@@ -126,7 +126,7 @@ func (h *Handlers) archiveOrg(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	if err := h.svc.ArchiveOrganization(r.Context(), principal, orgID, server.RequestIDFromContext(r.Context())); err != nil {
+	if err := h.svc.ArchiveOrganization(r.Context(), principal, orgID, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
@@ -188,7 +188,7 @@ func (h *Handlers) changeRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_role", "invalid role")
 		return
 	}
-	if err := h.svc.ChangeMemberRole(r.Context(), principal, orgID, userID, role, server.RequestIDFromContext(r.Context())); err != nil {
+	if err := h.svc.ChangeMemberRole(r.Context(), principal, orgID, userID, role, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
@@ -211,7 +211,7 @@ func (h *Handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	if err := h.svc.RemoveMember(r.Context(), principal, orgID, userID, server.RequestIDFromContext(r.Context())); err != nil {
+	if err := h.svc.RemoveMember(r.Context(), principal, orgID, userID, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
