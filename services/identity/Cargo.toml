@@ -66,7 +66,19 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 
+# Full LTO + codegen-units=1 peaks at multi-GB RAM and OOMs on small builders
+# (Northflank free / shared CI). Thin LTO is enough for a small API binary.
 [profile.release]
-lto = true
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
+strip = true
+opt-level = 3
+
+# Even lighter profile if a host still OOMs: build with
+#   cargo build --release --profile release-lowmem
+[profile.release-lowmem]
+inherits = "release"
+lto = false
+codegen-units = 32
+opt-level = 2
 strip = true
