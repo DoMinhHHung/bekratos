@@ -31,7 +31,7 @@ func TestCreateAndLastOwner(t *testing.T) {
 	principal := auth.Principal{UserID: ownerID, SessionID: uuid.Must(uuid.NewV7())}
 
 	org, err := svc.CreateOrganization(ctx, principal, CreateOrgInput{
-		Slug: "acme-" + ownerID.String()[:8], DisplayName: "Acme",
+		Slug: "acme-" + ownerID.String()[24:], DisplayName: "Acme",
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -78,7 +78,7 @@ func TestArchiveRequiresOwner(t *testing.T) {
 	ownerID := uuid.Must(uuid.NewV7())
 	principal := auth.Principal{UserID: ownerID, SessionID: uuid.Must(uuid.NewV7())}
 	org, err := svc.CreateOrganization(ctx, principal, CreateOrgInput{
-		Slug: "arc-" + ownerID.String()[:8], DisplayName: "Arc",
+		Slug: "arc-" + ownerID.String()[24:], DisplayName: "Arc",
 	})
 	if err != nil {
 		t.Fatal(err)
