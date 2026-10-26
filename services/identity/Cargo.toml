@@ -46,6 +46,8 @@ redis = { version = "0.27", default-features = false, features = [
     "tokio-comp",
     "connection-manager",
     "script",
+    "tokio-rustls-comp",
+    "tls-rustls-webpki-roots",
 ] }
 validator = { version = "0.19", features = ["derive"] }
 regex = "1"
