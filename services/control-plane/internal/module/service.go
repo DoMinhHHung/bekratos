@@ -18,6 +18,11 @@ var (
 	ErrConflictState = errors.New("conflict")
 )
 
+const (
+	platformRuntimeVersion = "1.0.0"
+	platformAPIContract    = "1"
+)
+
 type Service struct {
 	repo        *Repository
 	orgRepo     *org.Repository
@@ -45,7 +50,53 @@ func (s *Service) ResolveSelections(ctx context.Context, selections []Selection)
 	if err != nil {
 		return ResolutionPlan{}, err
 	}
-	return Resolve(modules, releases, selections)
+	return ResolveWithOptions(modules, releases, selections, ResolveOptions{
+		RuntimeVersion: platformRuntimeVersion,
+		APIContract:    platformAPIContract,
+	})
+}
+
+func (s *Service) ListPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) ([]Pin, int64, error) {
+	if _, _, err := s.authorizeEnv(ctx, principal, orgID, projectID, envID, false); err != nil {
+		return nil, 0, err
+	}
+	return s.repo.ListPins(ctx, envID)
+}
+
+func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64, requestID string) (ResolutionPlan, error) {
+	if expectedRevision == nil {
+		return ResolutionPlan{}, ErrInvalidInput
+	}
+	plan, err := s.ResolveSelections(ctx, selections)
+	if err != nil {
+		return ResolutionPlan{}, err
+	}
+	pins := make([]Pin, 0, len(plan.Releases))
+	for _, rr := range plan.Releases {
+		id, err := uuid.Parse(rr.ReleaseID)
+		if err != nil {
+			return ResolutionPlan{}, err
+		}
+		pins = append(pins, Pin{
+			EnvironmentID: envID,
+			ModuleSlug:    rr.ModuleSlug,
+			ReleaseID:     id,
+			Version:       rr.Version,
+		})
+	}
+	actor := principal.UserID
+	newRev, err := s.repo.ReplacePinsAuthorized(ctx, orgID, projectID, envID, pins, expectedRevision, actor, requestID)
+	if err != nil {
+		if errors.Is(err, ErrConflictRevision) {
+			return ResolutionPlan{}, ErrConflictState
+		}
+		if errors.Is(err, ErrForbidden) || errors.Is(err, ErrInactive) || errors.Is(err, ErrNotFound) {
+			return ResolutionPlan{}, err
+		}
+		return ResolutionPlan{}, err
+	}
+	plan.Revision = newRev
+	return plan, nil
 }
 
 func (s *Service) authorizeEnv(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, write bool) (project.Project, project.Environment, error) {
@@ -84,47 +135,4 @@ func (s *Service) authorizeEnv(ctx context.Context, principal auth.Principal, or
 		return project.Project{}, project.Environment{}, ErrInactive
 	}
 	return p, e, nil
-}
-
-func (s *Service) ListPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) ([]Pin, int64, error) {
-	if _, _, err := s.authorizeEnv(ctx, principal, orgID, projectID, envID, false); err != nil {
-		return nil, 0, err
-	}
-	return s.repo.ListPins(ctx, envID)
-}
-
-func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64, requestID string) (ResolutionPlan, error) {
-	if expectedRevision == nil {
-		return ResolutionPlan{}, ErrInvalidInput
-	}
-	if _, _, err := s.authorizeEnv(ctx, principal, orgID, projectID, envID, true); err != nil {
-		return ResolutionPlan{}, err
-	}
-	plan, err := s.ResolveSelections(ctx, selections)
-	if err != nil {
-		return ResolutionPlan{}, err
-	}
-	pins := make([]Pin, 0, len(plan.Releases))
-	for _, rr := range plan.Releases {
-		id, err := uuid.Parse(rr.ReleaseID)
-		if err != nil {
-			return ResolutionPlan{}, err
-		}
-		pins = append(pins, Pin{
-			EnvironmentID: envID,
-			ModuleSlug:    rr.ModuleSlug,
-			ReleaseID:     id,
-			Version:       rr.Version,
-		})
-	}
-	actor := principal.UserID
-	newRev, err := s.repo.ReplacePins(ctx, envID, pins, expectedRevision, &actor, &orgID, requestID)
-	if err != nil {
-		if errors.Is(err, ErrConflictRevision) {
-			return ResolutionPlan{}, ErrConflictState
-		}
-		return ResolutionPlan{}, err
-	}
-	plan.Revision = newRev
-	return plan, nil
 }
