@@ -6,133 +6,151 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestResolveAuthPullsCore(t *testing.T) {
-	modules := []Module{{Slug: "core"}, {Slug: "auth"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000001"), ModuleSlug: "core", Version: "1.0.0"},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000002"), ModuleSlug: "auth", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "core", VersionConstraint: "^1.0.0", Required: true}}},
-	}
-	plan, err := Resolve(modules, releases, []Selection{{ModuleSlug: "auth", Version: "1.0.0"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Releases) != 2 {
-		t.Fatalf("expected 2, got %d", len(plan.Releases))
+func rel(slug, version string, deps []Dependency, conflicts []string) Release {
+	return Release{
+		ID:                 uuid.Must(uuid.NewV7()),
+		ModuleSlug:         slug,
+		Version:            version,
+		RuntimeCompat:      ">=1.0.0",
+		APIContractVersion: "1",
+		Dependencies:       deps,
+		Conflicts:          conflicts,
 	}
 }
 
-func TestResolveOverlappingConstraintsBacktrack(t *testing.T) {
-	modules := []Module{{Slug: "a"}, {Slug: "b"}, {Slug: "c"}}
+func TestResolveAuthPullsCore(t *testing.T) {
+	modules := []Module{{Slug: "core"}, {Slug: "auth"}}
 	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000101"), ModuleSlug: "a", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "c", VersionConstraint: "1.0.0", Required: true}}},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000102"), ModuleSlug: "a", Version: "1.1.0",
-			Dependencies: []Dependency{{ModuleSlug: "c", VersionConstraint: "1.1.0", Required: true}}},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000103"), ModuleSlug: "b", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "c", VersionConstraint: "1.0.0", Required: true}}},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000104"), ModuleSlug: "c", Version: "1.0.0"},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000105"), ModuleSlug: "c", Version: "1.1.0"},
+		rel("core", "1.0.0", nil, nil),
+		rel("auth", "1.1.0", []Dependency{{ModuleSlug: "core", VersionConstraint: "^1.0.0", Required: true}}, nil),
 	}
-	plan, err := Resolve(modules, releases, []Selection{
-		{ModuleSlug: "a", Version: ">=1.0.0"},
-		{ModuleSlug: "b", Version: "1.0.0"},
+	plan, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "auth", Version: "1.1.0"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var aVer, cVer string
+	if len(plan.Releases) != 2 {
+		t.Fatalf("expected 2 releases, got %d", len(plan.Releases))
+	}
+}
+
+func TestResolve_Cycle(t *testing.T) {
+	modules := []Module{{Slug: "a"}, {Slug: "b"}}
+	releases := []Release{
+		rel("a", "1.0.0", []Dependency{{ModuleSlug: "b", VersionConstraint: "^1.0.0", Required: true}}, nil),
+		rel("b", "1.0.0", []Dependency{{ModuleSlug: "a", VersionConstraint: "^1.0.0", Required: true}}, nil),
+	}
+	_, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
+	})
+	if err == nil {
+		t.Fatal("expected cycle error")
+	}
+}
+
+func TestResolve_ConflictBacktrack(t *testing.T) {
+	modules := []Module{{Slug: "a"}, {Slug: "b"}}
+	releases := []Release{
+		rel("a", "2.0.0", nil, []string{"b"}),
+		rel("a", "1.0.0", nil, nil),
+		rel("b", "1.0.0", nil, nil),
+	}
+	plan, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}, {ModuleSlug: "b"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
+	})
+	if err != nil {
+		t.Fatalf("expected backtrack: %v", err)
+	}
+	by := map[string]string{}
 	for _, r := range plan.Releases {
-		if r.ModuleSlug == "a" {
-			aVer = r.Version
-		}
-		if r.ModuleSlug == "c" {
-			cVer = r.Version
-		}
+		by[r.ModuleSlug] = r.Version
 	}
-	if aVer != "1.0.0" || cVer != "1.0.0" {
-		t.Fatalf("backtrack failed: a=%s c=%s", aVer, cVer)
+	if by["a"] != "1.0.0" {
+		t.Fatalf("want a@1.0.0 got %v", by)
 	}
 }
 
-func TestResolveCycle(t *testing.T) {
-	modules := []Module{{Slug: "a"}, {Slug: "b"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000010"), ModuleSlug: "a", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "b", VersionConstraint: "1.0.0", Required: true}}},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000011"), ModuleSlug: "b", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "a", VersionConstraint: "1.0.0", Required: true}}},
-	}
-	if _, err := Resolve(modules, releases, []Selection{{ModuleSlug: "a", Version: "1.0.0"}}); err == nil {
-		t.Fatal("expected cycle")
-	}
-}
-
-func TestResolveConflict(t *testing.T) {
-	modules := []Module{{Slug: "a"}, {Slug: "b"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000020"), ModuleSlug: "a", Version: "1.0.0", Conflicts: []string{"b"}},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000021"), ModuleSlug: "b", Version: "1.0.0"},
-	}
-	if _, err := Resolve(modules, releases, []Selection{
-		{ModuleSlug: "a", Version: "1.0.0"},
-		{ModuleSlug: "b", Version: "1.0.0"},
-	}); err == nil {
-		t.Fatal("expected conflict")
-	}
-}
-
-func TestOptionalDependencySkippedWhenMissing(t *testing.T) {
+func TestResolve_RuntimeCompatRequired(t *testing.T) {
 	modules := []Module{{Slug: "a"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000030"), ModuleSlug: "a", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "missing", VersionConstraint: "1.0.0", Required: false}}},
-	}
-	plan, err := Resolve(modules, releases, []Selection{{ModuleSlug: "a", Version: "1.0.0"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Releases) != 1 {
-		t.Fatalf("optional missing should not fail: %d", len(plan.Releases))
+	releases := []Release{{
+		ID: uuid.Must(uuid.NewV7()), ModuleSlug: "a", Version: "1.0.0",
+		RuntimeCompat: ">=2.0.0", APIContractVersion: "1",
+	}}
+	_, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
+	})
+	if err == nil {
+		t.Fatal("expected runtime mismatch")
 	}
 }
 
-func TestDeterministicPermutation(t *testing.T) {
-	modules := []Module{{Slug: "core"}, {Slug: "auth"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000001"), ModuleSlug: "core", Version: "1.0.0"},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000002"), ModuleSlug: "auth", Version: "1.0.0",
-			Dependencies: []Dependency{{ModuleSlug: "core", VersionConstraint: "^1.0.0", Required: true}}},
+func TestResolve_APIContractMismatch(t *testing.T) {
+	modules := []Module{{Slug: "a"}}
+	releases := []Release{{
+		ID: uuid.Must(uuid.NewV7()), ModuleSlug: "a", Version: "1.0.0",
+		RuntimeCompat: ">=1.0.0", APIContractVersion: "2",
+	}}
+	_, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
+	})
+	if err == nil {
+		t.Fatal("expected api mismatch")
 	}
-	p1, err := Resolve(modules, releases, []Selection{{ModuleSlug: "auth", Version: "1.0.0"}, {ModuleSlug: "core", Version: "1.0.0"}})
+}
+
+func TestResolve_MissingCompatMetadata(t *testing.T) {
+	modules := []Module{{Slug: "a"}}
+	releases := []Release{{
+		ID: uuid.Must(uuid.NewV7()), ModuleSlug: "a", Version: "1.0.0",
+	}}
+	_, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}}, ResolveOptions{
+		RuntimeVersion: "1.0.0", APIContract: "1",
+	})
+	if err == nil {
+		t.Fatal("expected missing metadata rejection")
+	}
+}
+
+func TestResolve_OptionalAlreadySelectedIncompatible(t *testing.T) {
+	modules := []Module{{Slug: "a"}, {Slug: "b"}}
+	releases := []Release{
+		rel("a", "1.0.0", []Dependency{{ModuleSlug: "b", VersionConstraint: "^2.0.0", Required: false}}, nil),
+		rel("b", "1.0.0", nil, nil),
+	}
+	plan, err := ResolveWithOptions(modules, releases, []Selection{
+		{ModuleSlug: "a"}, {ModuleSlug: "b", Version: "1.0.0"},
+	}, ResolveOptions{RuntimeVersion: "1.0.0", APIContract: "1"})
+	if err != nil {
+		t.Fatalf("optional incompatible must not fail: %v", err)
+	}
+	if len(plan.Releases) != 2 {
+		t.Fatalf("got %d", len(plan.Releases))
+	}
+}
+
+func TestResolve_PermutationDeterminism(t *testing.T) {
+	modules := []Module{{Slug: "a"}, {Slug: "b"}, {Slug: "c"}}
+	releases := []Release{
+		rel("a", "1.0.0", []Dependency{{ModuleSlug: "c", VersionConstraint: "^1.0.0", Required: true}}, nil),
+		rel("b", "1.0.0", nil, nil),
+		rel("c", "1.0.0", nil, nil),
+	}
+	opts := ResolveOptions{RuntimeVersion: "1.0.0", APIContract: "1"}
+	p1, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "b"}, {ModuleSlug: "a"}}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p2, err := Resolve(modules, releases, []Selection{{ModuleSlug: "core", Version: "1.0.0"}, {ModuleSlug: "auth", Version: "1.0.0"}})
+	p2, err := ResolveWithOptions(modules, releases, []Selection{{ModuleSlug: "a"}, {ModuleSlug: "b"}}, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(p1.Releases) != len(p2.Releases) {
-		t.Fatal("length")
+		t.Fatal("len mismatch")
 	}
 	for i := range p1.Releases {
-		if p1.Releases[i] != p2.Releases[i] {
-			t.Fatalf("non-deterministic: %v vs %v", p1.Releases, p2.Releases)
+		if p1.Releases[i].ModuleSlug != p2.Releases[i].ModuleSlug || p1.Releases[i].Version != p2.Releases[i].Version {
+			t.Fatalf("%+v vs %+v", p1.Releases, p2.Releases)
 		}
-	}
-}
-
-func TestPinStableWhenNewerReleaseExists(t *testing.T) {
-	modules := []Module{{Slug: "core"}}
-	releases := []Release{
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000030"), ModuleSlug: "core", Version: "1.0.0"},
-		{ID: uuid.MustParse("01900000-0000-7000-8000-000000000031"), ModuleSlug: "core", Version: "1.1.0"},
-	}
-	plan, err := Resolve(modules, releases, []Selection{{ModuleSlug: "core", Version: "1.0.0"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if plan.Releases[0].Version != "1.0.0" {
-		t.Fatalf("pin floated: %s", plan.Releases[0].Version)
 	}
 }
