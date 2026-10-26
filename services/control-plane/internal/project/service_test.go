@@ -31,7 +31,7 @@ func TestCreateProjectWithDevEnv(t *testing.T) {
 	ownerID := uuid.Must(uuid.NewV7())
 	principal := auth.Principal{UserID: ownerID, SessionID: uuid.Must(uuid.NewV7())}
 	o, err := orgSvc.CreateOrganization(ctx, principal, org.CreateOrgInput{
-		Slug: "p4-" + ownerID.String()[:8], DisplayName: "P4",
+		Slug: "p4-" + ownerID.String()[24:], DisplayName: "P4",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestCreateProjectWithDevEnv(t *testing.T) {
 
 	svc := NewService(NewRepository(pool), orgRepo)
 	p, env, err := svc.CreateProject(ctx, principal, o.ID, CreateProjectInput{
-		Slug: "app-" + ownerID.String()[:6], DisplayName: "App",
+		Slug: "app-" + ownerID.String()[24:], DisplayName: "App",
 	})
 	if err != nil {
 		t.Fatalf("create project: %v", err)
@@ -62,7 +62,7 @@ func TestCreateProjectWithDevEnv(t *testing.T) {
 	}
 
 	otherOrg, err := orgSvc.CreateOrganization(ctx, principal, org.CreateOrgInput{
-		Slug: "p4b-" + ownerID.String()[:8], DisplayName: "P4B",
+		Slug: "p4b-" + ownerID.String()[24:], DisplayName: "P4B",
 	})
 	if err != nil {
 		t.Fatal(err)
