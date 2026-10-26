@@ -1,61 +1,47 @@
 # Bekratos
 
-Bekratos là nền tảng hướng tới việc giúp người dùng tạo và vận hành backend bằng cấu hình no-code/low-code, đồng thời cho phép developer tích hợp API và tùy chỉnh hệ thống qua code.
+Bekratos là nền tảng Backend-as-a-Service hướng tới no-code/low-code. Người dùng có thể tạo backend bằng cách chọn modules, tùy chỉnh entities, fields và relationships qua Dashboard; developer có thể tích hợp API trực tiếp và tùy chỉnh ứng dụng bằng code.
 
-> **Trạng thái hiện tại (26/10/2026):** `services/identity/` có source Rust, migration PostgreSQL, Docker, CI và integration/security tests. `services/control-plane/` và Backend Runtime/Data Plane chưa được triển khai trong repository. Việc có source/tests không đồng nghĩa toàn bộ test đã pass hoặc service đã production-ready; kiểm tra CI và xác minh trên môi trường disposable trước khi release.
+> Trạng thái tại 26/10/2026: Identity Service có source Rust, migration PostgreSQL, Docker, CI và integration/security tests. Control Plane và Backend Runtime/Data Plane chưa được triển khai. Có source/tests không đồng nghĩa mọi test đã pass hoặc service production-ready; phải kiểm tra CI và xác minh trên môi trường disposable trước release.
 
 ## Kiến trúc dự kiến
 
-- **Identity Service** — quản lý tài khoản nền tảng, credentials, sessions và platform JWT/JWKS cho người dùng đăng nhập Dashboard.
-- **Control Plane (Go, kế hoạch)** — quản lý organizations, memberships, projects, environments, module registry/configuration, entity/field/relationship definitions, schema versions, API-key lifecycle và deployment state.
-- **Backend Runtime / Data Plane (kế hoạch)** — phục vụ API của ứng dụng do khách hàng tạo; thực thi module contracts, Auth cho end-users, CRUD, validation, relationships và data authorization.
+- Identity Service: tài khoản nền tảng, credentials, sessions và platform JWT/JWKS cho người đăng nhập Dashboard.
+- Control Plane: organizations, memberships, projects, environments, module registry/configuration, entity/field/relationship definitions, configuration versions, API-key lifecycle và deployment state.
+- Backend Runtime/Data Plane: API của ứng dụng do khách hàng tạo, runtime Auth dành cho end-users, CRUD, validation, relationships và data authorization.
 
-Platform users và project end-users là hai identity domains riêng. Platform JWT dùng cho management API; project credentials dùng cho runtime API. Không dùng API key của ứng dụng để gọi Control Plane, và không mặc định xem platform JWT là token của end-user.
+Platform users và project end-users là hai identity domains riêng. Platform JWT dùng cho management API; runtime credentials và end-user tokens chỉ thuộc project/environment tương ứng. Không dùng runtime API key để gọi Control Plane, và không mặc định xem platform JWT là token của end-user.
 
-## Repository layout
+## Repository
 
-```text
-bekratos/
-├── .github/workflows/      # CI và security workflows
-├── docs/                   # Tài liệu vận hành và thiết kế
-└── services/
-    └── identity/           # Rust, Axum, PostgreSQL, Redis
-```
-
-Khi Control Plane bắt đầu được triển khai, nó sẽ nằm trong `services/control-plane/`. Backend Runtime sẽ được đặt trong một service riêng sau khi domain và security contracts được chốt.
+- services/identity/: Rust, Axum, PostgreSQL, Redis và JWT ES256/JWKS.
+- docs/operations.md: vận hành Identity.
+- docs/control-plane/domain.md: domain model và architecture boundary.
+- docs/control-plane/implementation-plan.md: roadmap từng phase.
+- docs/grok/CONTROL_PLANE_PROMPTS.md: prompt implementer/reviewer dùng lâu dài.
+- docs/grok/CONTROL_PLANE_PHASE_1.md: prompt triển khai nền Go đầu tiên.
+- services/control-plane/: sẽ được tạo trong Phase 1, chưa phải source hiện có.
 
 ## Identity Service
 
-Xem [Identity Service README](services/identity/README.md) để biết phạm vi API, mô hình dữ liệu, cấu hình, test và các hạn chế tích hợp.
+Xem [Identity Service README](services/identity/README.md) để biết route, cấu hình, mô hình dữ liệu và hạn chế tích hợp. Identity dùng PostgreSQL làm nguồn sự thật cho identity/security state; Redis hiện hỗ trợ rate limiting và chức năng phụ trợ. Access token dùng JWT ES256/JWKS; endpoint JWKS hiện là GET /v1/jwks.
 
-Identity dùng PostgreSQL làm nguồn sự thật cho tài khoản và trạng thái bảo mật; Redis hỗ trợ rate limiting và các chức năng phụ trợ. Access token dùng JWT ES256/JWKS; refresh token được rotation. Endpoint JWKS hiện được đăng ký tại `/v1/jwks`.
+Lưu ý trước khi dùng với người dùng thật: cấu hình ConsoleMailer hiện không gửi email ra ngoài. Cần tích hợp và kiểm thử mail provider thực, đồng thời xác minh CI, migrations, secret handling, failure modes và deploy controls trước production.
 
-Lưu ý trước khi dùng với người dùng thật: cấu hình mail hiện có `ConsoleMailer` không gửi email ra ngoài. Cần tích hợp và kiểm thử một mail provider thực, đồng thời xác minh CI, migration, secret handling, failure modes và deploy controls trước production.
-
-## Control Plane design
-
-Tài liệu thiết kế ban đầu dự kiến đặt trong `docs/control-plane/` sau khi được đưa vào repository. Các quyết định chính cho MVP:
+## Quyết định Control Plane MVP
 
 - Shared runtime là mặc định; dedicated runtime là hướng mở rộng.
-- Built-in/module entities giữ các field cốt lõi có kiểu dữ liệu thật; custom scalar fields có thể dùng JSONB.
-- Custom entities dùng record store JSONB ở MVP; limitations về unique/index/query phải được ghi rõ.
-- Relationships là định nghĩa có kiểu riêng, có cardinality, dependency và deletion behavior; không coi ID nằm trong JSONB là quan hệ đã được đảm bảo toàn vẹn.
-- Schema/config được version hóa. Thay đổi tương thích có thể auto-apply; thay đổi phá vỡ tương thích hoặc destructive cần kiểm tra, xác nhận và migration an toàn.
-- API keys chỉ nhận diện credential; authorization vẫn cần scope, role/policy và project/environment isolation.
+- Built-in/module entities giữ các field lõi có kiểu dữ liệu thật; custom scalar fields có thể lưu JSONB.
+- Custom entities dùng record store JSONB trong MVP; giới hạn về unique/index/query phải được ghi rõ.
+- Relationships là định nghĩa có kiểu riêng với cardinality, dependency và deletion behavior; không coi ID trong JSONB là quan hệ đã đảm bảo toàn vẹn.
+- Config được version hóa. Thay đổi tương thích có thể auto-apply; thay đổi phá vỡ hoặc destructive cần xác nhận và migration an toàn.
+- API keys chỉ nhận diện credential. Authorization vẫn cần role/policy, scope và project/environment isolation.
+- Không chạy arbitrary user SQL, code hoặc eval trong runtime MVP.
+- Không báo deployment ready khi chưa có xác nhận readiness thật từ Runtime/provider.
 
-## Development workflow
+## Workflow
 
-- Thực hiện mỗi phase trên branch riêng từ nhánh tích hợp đã thống nhất; không sửa `main` trực tiếp.
-- Làm một phase mỗi lần, kiểm tra diff, chạy các test liên quan và dừng chờ review trước phase kế tiếp.
-- Báo cáo kết quả kiểm tra thực tế; không tuyên bố test, commit, push hoặc deploy nếu chưa thực hiện.
-- Không ghi secrets, password, token, magic links, private keys hoặc authorization headers vào source, fixtures, logs hay CI artifacts.
-
-## Project status
-
-- [x] Identity service source và tài liệu dịch vụ có trong repository.
-- [ ] Xác minh CI hiện tại và đầy đủ test chạy trên PostgreSQL/Redis disposable.
-- [ ] Chốt hợp đồng Identity ↔ Control Plane cho active-session validation và verified-primary-email; không giả định JWT hiện có các claim này.
-- [ ] Implement Control Plane foundation.
-- [ ] Implement module/schema configuration và safe activation/versioning.
-- [ ] Implement Backend Runtime/Data Plane, tenant isolation và runtime authorization.
-- [ ] Hoàn thành release-readiness/security review trước production.
+- Dùng dev làm integration branch; mỗi phase làm trên branch riêng từ dev mới nhất. Không sửa main trực tiếp.
+- Implement một phase, review diff, chạy tests thực tế và dừng chờ review trước phase tiếp theo.
+- Báo cáo trung thực lệnh đã chạy/chưa chạy. Không ghi secrets, passwords, tokens, magic links, private keys hoặc Authorization headers vào source, fixtures, logs hay CI artifacts.
+- Trước production phải có cross-tenant authorization tests, migrations tests, failure/concurrency tests, observability, backup/restore và incident response đã được xác minh.
