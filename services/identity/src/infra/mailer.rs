@@ -100,7 +100,7 @@ impl ResendMailer {
         });
 
         let payload = serde_json::to_vec(&json!({
-            "from": self.from,
+            "from": &self.from,
             "to": [email.to],
             "subject": email.subject,
             "text": email.text_body
