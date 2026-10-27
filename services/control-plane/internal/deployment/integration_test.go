@@ -24,7 +24,38 @@ func setupDeployEnv(t *testing.T) (context.Context, *pgxpool.Pool, *Service, uui
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	pool, err := db.NewPool(ctx, dsn)
+	bootstrapPool, err := db.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaName := "deployment_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA "+schemaName); err != nil {
+		bootstrapPool.Close()
+		t.Fatal(err)
+	}
+	bootstrapPool.Close()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupPool, err := db.NewPool(cleanupCtx, dsn)
+		if err != nil {
+			t.Errorf("open cleanup pool: %v", err)
+			return
+		}
+		defer cleanupPool.Close()
+		if _, err := cleanupPool.Exec(cleanupCtx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE"); err != nil {
+			t.Errorf("drop test schema: %v", err)
+		}
+	})
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName + ",public"
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
