@@ -372,3 +372,136 @@ func TestApplyMissingEnvironmentAckBlocks(t *testing.T) {
 	}
 	_ = pool
 }
+
+func TestConfigVersionSuccessfulApplyActivatesAndSetsActivePointer(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID := setupEnv(t)
+	orgRepo := org.NewRepository(pool)
+	repo := NewRepository(pool)
+	adapter := &RecordingApplyAdapter{}
+	svc := NewService(repo, orgRepo, adapter, slog.Default())
+	principal := auth.Principal{UserID: userID}
+
+	version := createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "activate-"+uuid.NewString())
+	adapter.Result = ApplyResult{
+		Accepted:                true,
+		EnvironmentID:           envID,
+		AppliedVersion:          version.ID,
+		AppliedSHA256:           version.ManifestSHA256,
+		ExpectedActiveVersionID: nil,
+	}
+
+	n, err := svc.ProcessOnce(ctx, "activate-worker", time.Minute, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n < 1 {
+		t.Fatalf("processed=%d; want at least 1", n)
+	}
+
+	got, err := svc.GetVersion(ctx, principal, orgID, projectID, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateActive {
+		t.Fatalf("version state=%s; want active", got.State)
+	}
+	if got.ActivatedAt == nil {
+		t.Fatal("activated_at is nil")
+	}
+
+	var active uuid.UUID
+	if err := pool.QueryRow(ctx, `
+SELECT active_configuration_version_id
+FROM project_environments
+WHERE id = $1`, envID).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != version.ID {
+		t.Fatalf("active_configuration_version_id=%s; want %s", active, version.ID)
+	}
+
+	job, err := svc.repo.GetJobByVersion(ctx, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != JobSucceeded {
+		t.Fatalf("job state=%s; want succeeded", job.State)
+	}
+	if len(adapter.Calls) != 1 {
+		t.Fatalf("adapter calls=%d; want 1", len(adapter.Calls))
+	}
+	call := adapter.Calls[0]
+	if call.EnvironmentID != envID || call.VersionID != version.ID || call.ManifestSHA256 != version.ManifestSHA256 {
+		t.Fatalf("adapter request mismatch: %+v", call)
+	}
+}
+
+func TestConfigVersionIdempotentCandidateReuse(t *testing.T) {
+	ctx, _, svc, userID, orgID, projectID, envID := setupEnv(t)
+	principal := auth.Principal{UserID: userID}
+	key := "idem-" + uuid.NewString()
+	in := CreateCandidateInput{
+		ExpectedSchemaRevision: 0,
+		ExpectedPinRevision:    0,
+		IdempotencyKey:         key,
+	}
+
+	first, err := svc.CreateCandidate(ctx, principal, orgID, projectID, envID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Reused {
+		t.Fatal("first create should not be reused")
+	}
+
+	second, err := svc.CreateCandidate(ctx, principal, orgID, projectID, envID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Reused {
+		t.Fatal("second create with same key should be reused")
+	}
+	if second.Version.ID != first.Version.ID {
+		t.Fatalf("version ids differ: %s vs %s", first.Version.ID, second.Version.ID)
+	}
+	if second.Version.VersionNumber != first.Version.VersionNumber {
+		t.Fatalf("version numbers differ: %d vs %d", first.Version.VersionNumber, second.Version.VersionNumber)
+	}
+	if second.Version.ManifestSHA256 != first.Version.ManifestSHA256 {
+		t.Fatal("manifest hashes differ on idempotent reuse")
+	}
+}
+
+func TestConfigVersionStaleRevisionRejected(t *testing.T) {
+	ctx, _, svc, userID, orgID, projectID, envID := setupEnv(t)
+	principal := auth.Principal{UserID: userID}
+
+	_, err := svc.CreateCandidate(ctx, principal, orgID, projectID, envID, CreateCandidateInput{
+		ExpectedSchemaRevision: 99,
+		ExpectedPinRevision:    0,
+		IdempotencyKey:         "stale-schema-" + uuid.NewString(),
+	})
+	if !errors.Is(err, ErrConflictRevision) {
+		t.Fatalf("stale schema revision error=%v; want ErrConflictRevision", err)
+	}
+
+	_, err = svc.CreateCandidate(ctx, principal, orgID, projectID, envID, CreateCandidateInput{
+		ExpectedSchemaRevision: 0,
+		ExpectedPinRevision:    7,
+		IdempotencyKey:         "stale-pin-" + uuid.NewString(),
+	})
+	if !errors.Is(err, ErrConflictRevision) {
+		t.Fatalf("stale pin revision error=%v; want ErrConflictRevision", err)
+	}
+
+	bogusActive := uuid.Must(uuid.NewV7())
+	_, err = svc.CreateCandidate(ctx, principal, orgID, projectID, envID, CreateCandidateInput{
+		ExpectedActiveVersionID: &bogusActive,
+		ExpectedSchemaRevision:  0,
+		ExpectedPinRevision:     0,
+		IdempotencyKey:          "stale-active-" + uuid.NewString(),
+	})
+	if !errors.Is(err, ErrConflictRevision) {
+		t.Fatalf("stale expected active error=%v; want ErrConflictRevision", err)
+	}
+}
