@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/apikey"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/configversion"
@@ -50,6 +51,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
 	worker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
 
+	apiKeyRepo := apikey.NewRepository(pool)
+	apiKeySvc := apikey.NewService(apiKeyRepo, orgRepo)
+	apiKeyHandlers := apikey.NewHandlers(apiKeySvc)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
 	mux.HandleFunc("/readyz", h.Readyz)
@@ -58,6 +63,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	moduleHandlers.Register(mux, authMW)
 	schemaHandlers.Register(mux, authMW)
 	configVersionHandlers.Register(mux, authMW)
+	apiKeyHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)
