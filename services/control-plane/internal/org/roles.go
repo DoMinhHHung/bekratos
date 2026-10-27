@@ -90,3 +90,11 @@ func (r Role) CanMutateSchema() bool {
 func (r Role) CanManageAPIKeys() bool {
 	return r == RoleOwner || r == RoleAdmin
 }
+
+func (r Role) CanDeploy() bool {
+	return r == RoleOwner || r == RoleAdmin
+}
+
+func (r Role) CanReadDeployments() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper || r == RoleViewer
+}

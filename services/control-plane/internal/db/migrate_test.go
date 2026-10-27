@@ -34,27 +34,37 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	if files[0].sql == "" {
 		t.Error("migration SQL is empty")
 	}
-	var has008, has010 bool
+	var has008, has009, has010, has011 bool
 	var maxVersion int64
 	for _, f := range files {
 		if f.version > maxVersion {
 			maxVersion = f.version
 		}
-		if f.version == 8 {
+		switch f.version {
+		case 8:
 			has008 = true
-		}
-		if f.version == 10 {
+		case 9:
+			has009 = true
+		case 10:
 			has010 = true
+		case 11:
+			has011 = true
 		}
 	}
 	if !has008 {
 		t.Fatal("expected migration version 8 (schema_drafts)")
 	}
+	if !has009 {
+		t.Fatal("expected migration version 9 (config_versions)")
+	}
 	if !has010 {
 		t.Fatal("expected migration version 10 (api_keys)")
 	}
-	if maxVersion < 10 {
-		t.Fatalf("max migration version=%d, want >= 10", maxVersion)
+	if !has011 {
+		t.Fatal("expected migration version 11 (deployments)")
+	}
+	if maxVersion < 11 {
+		t.Fatalf("max migration version=%d, want >= 11", maxVersion)
 	}
 }
 
@@ -92,8 +102,8 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest < 10 {
-		t.Fatalf("latest migration=%d, want >= 10", latest)
+	if latest < 11 {
+		t.Fatalf("latest migration=%d, want >= 11", latest)
 	}
 
 	var draftTable int
@@ -107,10 +117,6 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 		t.Fatal("environment_schema_drafts missing after migrate")
 	}
 
-	if latest < 10 {
-		t.Fatalf("latest migration=%d, want >= 10", latest)
-	}
-
 	var apiKeysTable int
 	if err := pool.QueryRow(ctx, `
 		SELECT count(*) FROM information_schema.tables
@@ -120,6 +126,39 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	}
 	if apiKeysTable != 1 {
 		t.Fatal("api_keys missing after migrate")
+	}
+
+	var cfgTable int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_configuration_versions'`).Scan(&cfgTable); err != nil {
+		t.Fatal(err)
+	}
+	if cfgTable != 1 {
+		t.Fatal("environment_configuration_versions missing after migrate")
+	}
+
+	var deployTable int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM information_schema.tables
+WHERE table_schema = current_schema() AND table_name = 'deployments'`).Scan(&deployTable); err != nil {
+		t.Fatal(err)
+	}
+	if deployTable != 1 {
+		t.Fatal("deployments table missing after migrate")
+	}
+
+	var fpCol int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*) FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'deployments'
+  AND column_name = 'request_fingerprint'`).Scan(&fpCol); err != nil {
+		t.Fatal(err)
+	}
+	if fpCol != 1 {
+		t.Fatal("request_fingerprint column missing on deployments")
 	}
 
 	var nullable string
@@ -137,6 +176,122 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	}
 	if err := Ping(ctx, pool, 2*time.Second); err != nil {
 		t.Fatalf("Ping after migrate: %v", err)
+	}
+}
+
+func TestMigrateUpgradesFromPhase8Schema(t *testing.T) {
+	dsn := os.Getenv("DATABASE_URL_TEST")
+	if dsn == "" {
+		t.Skip("DATABASE_URL_TEST not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	adminPool, err := NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adminPool.Close()
+
+	schema := "control_plane_upgrade_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := adminPool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = adminPool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE")
+	}()
+
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.RuntimeParams["search_path"] = schema
+	upgradePool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upgradePool.Close()
+
+	files, err := loadMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := upgradePool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range files {
+		if migration.version > 10 {
+			continue
+		}
+		if _, err := tx.Exec(ctx, migration.sql); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("apply preceding migration %s: %v", migration.name, err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, migration.version); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("record preceding migration %s: %v", migration.name, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, upgradePool); err != nil {
+		t.Fatalf("upgrade from schema version 10: %v", err)
+	}
+	var latest int64
+	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest != 11 {
+		t.Fatalf("latest migration=%d, want 11", latest)
+	}
+	var deployTable int
+	if err := upgradePool.QueryRow(ctx, `
+SELECT count(*) FROM information_schema.tables
+WHERE table_schema = current_schema() AND table_name = 'deployments'`).Scan(&deployTable); err != nil {
+		t.Fatal(err)
+	}
+	if deployTable != 1 {
+		t.Fatal("deployments missing after upgrade to 11")
+	}
+	var cfgTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_configuration_versions'`).Scan(&cfgTable); err != nil {
+		t.Fatal(err)
+	}
+	if cfgTable != 1 {
+		t.Fatal("environment_configuration_versions missing after upgrade")
+	}
+	var apiKeysTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'api_keys'`).Scan(&apiKeysTable); err != nil {
+		t.Fatal(err)
+	}
+	if apiKeysTable != 1 {
+		t.Fatal("api_keys missing after upgrade")
+	}
+	var draftTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_schema_drafts'`).Scan(&draftTable); err != nil {
+		t.Fatal(err)
+	}
+	if draftTable != 1 {
+		t.Fatal("environment_schema_drafts missing after upgrade")
+	}
+	var seeded int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM module_releases
+		WHERE module_slug IN ('core', 'auth') AND published_at IS NOT NULL`).Scan(&seeded); err != nil {
+		t.Fatal(err)
+	}
+	if seeded != 3 {
+		t.Fatalf("upgrade lost or unpublished seeded releases: count=%d", seeded)
 	}
 }
 
@@ -207,8 +362,8 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 10 {
-		t.Fatalf("latest migration=%d, want 10", latest)
+	if latest != 11 {
+		t.Fatalf("latest migration=%d, want 11", latest)
 	}
 
 	var apiKeysTable int
@@ -219,7 +374,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if apiKeysTable != 1 {
-		t.Fatal("api_keys missing after upgrade to 10")
+		t.Fatal("api_keys missing after upgrade to 11")
 	}
 
 	var cfgTable int
@@ -230,7 +385,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfgTable != 1 {
-		t.Fatal("environment_configuration_versions missing after upgrade to 9")
+		t.Fatal("environment_configuration_versions missing after upgrade")
 	}
 	var seeded int
 	if err := upgradePool.QueryRow(ctx, `
@@ -250,6 +405,15 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	}
 	if draftTable != 1 {
 		t.Fatal("environment_schema_drafts missing after upgrade to 8")
+	}
+	var deployTable int
+	if err := upgradePool.QueryRow(ctx, `
+SELECT count(*) FROM information_schema.tables
+WHERE table_schema = current_schema() AND table_name = 'deployments'`).Scan(&deployTable); err != nil {
+		t.Fatal(err)
+	}
+	if deployTable != 1 {
+		t.Fatal("deployments missing after full upgrade path")
 	}
 	var nullable string
 	var defaultValue *string
