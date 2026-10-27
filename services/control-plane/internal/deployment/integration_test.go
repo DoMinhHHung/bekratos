@@ -170,15 +170,15 @@ func TestRecordingProviderReadyRequiresValidatedEvidence(t *testing.T) {
 	principal := auth.Principal{UserID: userID}
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: envID,
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        envID,
 			VersionID:            versionID,
 			ReadinessProbePassed: true,
 			ReadinessProbeID:     "test-readiness-probe",
 			ReadinessObservedAt:  time.Now().UTC(),
-			Host:          "runtime.example.test",
-			URL:           "https://runtime.example.test",
-			Region:        "local",
+			Host:                 "runtime.example.test",
+			URL:                  "https://runtime.example.test",
+			Region:               "local",
 		},
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
@@ -205,13 +205,13 @@ func TestReadyRejectedOnEnvironmentMismatch(t *testing.T) {
 	principal := auth.Principal{UserID: userID}
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: uuid.Must(uuid.NewV7()),
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        uuid.Must(uuid.NewV7()),
 			VersionID:            versionID,
 			ReadinessProbePassed: true,
 			ReadinessProbeID:     "test-readiness-probe",
 			ReadinessObservedAt:  time.Now().UTC(),
-			Host:          "evil.example",
+			Host:                 "evil.example",
 		},
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
@@ -343,14 +343,14 @@ func TestStaleWorkerCannotMarkReady(t *testing.T) {
 	}
 
 	err = repo.MarkReady(ctx, d, "worker-b", ProvisionResult{
-		Outcome:       OutcomeSuccess,
-		EnvironmentID: d.EnvironmentID,
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        d.EnvironmentID,
 		VersionID:            d.ConfigurationVersionID,
-			RequestID:             d.ProviderRequestID,
-			ReadinessProbePassed:  true,
-			ReadinessProbeID:      "test-readiness-probe",
-			ReadinessObservedAt:   time.Now().UTC(),
-		Host:          "x",
+		RequestID:            d.ProviderRequestID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "test-readiness-probe",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "x",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("error=%v; want stale worker", err)
@@ -398,14 +398,14 @@ WHERE id = $1`, d.ID)
 	}
 
 	err = repo.MarkReady(ctx, d, "worker-lease", ProvisionResult{
-		Outcome:       OutcomeSuccess,
-		EnvironmentID: envID,
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
 		VersionID:            versionID,
 		RequestID:            d.ProviderRequestID,
-			ReadinessProbePassed: true,
-			ReadinessProbeID:     "test-readiness-probe",
-			ReadinessObservedAt:  time.Now().UTC(),
-		Host:          "host.example",
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "test-readiness-probe",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "host.example",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("MarkReady after expiry: %v", err)
@@ -567,14 +567,14 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 	repo := NewRepository(pool)
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: envID,
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        envID,
 			VersionID:            versionID,
 			ReadinessProbePassed: true,
 			ReadinessProbeID:     "test-readiness-probe",
 			ReadinessObservedAt:  time.Now().UTC(),
-			Host:          "ok.example",
-			URL:           "https://ok.example",
+			Host:                 "ok.example",
+			URL:                  "https://ok.example",
 		},
 	}
 	svc := NewService(repo, rec, nil)
@@ -595,7 +595,6 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 		t.Fatalf("status=%s", got.Status)
 	}
 }
-
 
 type contextTimeoutProvider struct{}
 
@@ -687,7 +686,6 @@ func TestProviderFailureIsSanitized(t *testing.T) {
 		t.Fatal("provider diagnostics leaked into public failure fields")
 	}
 }
-
 
 func TestNoActiveConfigRejected(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
