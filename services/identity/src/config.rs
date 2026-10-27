@@ -207,6 +207,7 @@ impl Config {
                 return Err(AppError::config("SMTP_PORT must be 465 for implicit TLS"));
             }
             if !valid_mailbox(&smtp_username)
+                || !valid_mailbox(&mail_from)
                 || smtp_app_password.len() != 16
                 || !smtp_app_password.bytes().all(|b| b.is_ascii_alphanumeric())
             {
@@ -214,7 +215,11 @@ impl Config {
                     "SMTP_USERNAME must be an email address and SMTP_APP_PASSWORD must be a 16-character Google App Password",
                 ));
             }
-            if smtp_username.contains('\r') || smtp_username.contains('\n') || smtp_app_password.contains('\r') || smtp_app_password.contains('\n') {
+            if smtp_username.contains('\r')
+                || smtp_username.contains('\n')
+                || smtp_app_password.contains('\r')
+                || smtp_app_password.contains('\n')
+            {
                 return Err(AppError::config("SMTP credentials contain invalid characters"));
             }
         }
