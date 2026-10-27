@@ -725,7 +725,7 @@ func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 		Host:                 "runtime.example.test",
 		URL:                  "https://runtime.example.test",
 	}}
-	svc = NewService(NewRepository(pool), rec, nil)
+	svc := NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "wrong-deployment-evidence-" + uuid.NewString(),
 	})
@@ -759,7 +759,7 @@ func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 		Host:                 "evil.example",
 		URL:                  "https://runtime.example.test",
 	}}
-	svc = NewService(NewRepository(pool), rec, nil)
+	svc := NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "mismatched-target-" + uuid.NewString(),
 	})
@@ -790,7 +790,7 @@ func TestReadyRejectsNonHTTPSURL(t *testing.T) {
 		Host:                 "runtime.example.test",
 		URL:                  "http://runtime.example.test",
 	}}
-	svc = NewService(NewRepository(pool), rec, nil)
+	svc := NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "non-https-target-" + uuid.NewString(),
 	})
@@ -842,6 +842,68 @@ func TestDatabaseRejectsReadyWithoutReadinessEvidence(t *testing.T) {
 	_, err = pool.Exec(ctx, "UPDATE deployments SET status = 'ready' WHERE id = $1", created.Deployment.ID)
 	if err == nil {
 		t.Fatal("database must reject ready status without persisted readiness evidence")
+	}
+}
+
+func TestExplicitQueuedConfigurationVersionCannotBeDeployed(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	candidateID := uuid.Must(uuid.NewV7())
+	_, err := pool.Exec(ctx, `
+INSERT INTO environment_configuration_versions (
+  id, environment_id, version_number, schema_revision, pin_revision,
+  manifest_format_version, manifest_canonical, manifest_sha256,
+  compatibility, state, created_by_user_id
+) VALUES (
+  $1, $2, 2, 1, 1, 1, '{}',
+  'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  'compatible', 'queued', $3
+)`, candidateID, envID, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "queued-config-" + uuid.NewString(),
+		ConfigurationVersionID: &candidateID,
+	})
+	if !errors.Is(err, ErrVersionNotDeployable) {
+		t.Fatalf("error=%v; want non-deployable configuration state", err)
+	}
+}
+
+func TestWhitespaceOnlyIdempotencyKeyIsRejected(t *testing.T) {
+	ctx, _, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	_, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: " \t\r\n ",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error=%v; want invalid input for whitespace-only idempotency key", err)
+	}
+}
+
+func TestDeploymentOutcomeWritesAuditEvent(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "outcome-audit-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-audit", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.failed'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND request_id = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("deployment failure audit rows=%d; want 1", count)
 	}
 }
 func TestNoActiveConfigRejected(t *testing.T) {

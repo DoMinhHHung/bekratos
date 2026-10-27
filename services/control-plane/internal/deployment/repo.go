@@ -69,6 +69,7 @@ func requestFingerprint(mode TargetMode, versionChoice string) string {
 }
 
 func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string) (CreateResult, error) {
+	in.IdempotencyKey = strings.TrimSpace(in.IdempotencyKey)
 	if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
 		return CreateResult{}, fmt.Errorf("%w: idempotency_key", ErrInvalidInput)
 	}
@@ -177,17 +178,20 @@ RETURNING id`,
 
 func (r *Repository) resolveVersionID(ctx context.Context, tx pgx.Tx, envID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
 	if explicit != nil {
-		var exists bool
+		var state string
 		err := tx.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1 FROM environment_configuration_versions
-  WHERE id = $1 AND environment_id = $2
-)`, *explicit, envID).Scan(&exists)
+SELECT state
+FROM environment_configuration_versions
+WHERE id = $1 AND environment_id = $2
+FOR UPDATE`, *explicit, envID).Scan(&state)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrConfigMismatch
+		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if !exists {
-			return uuid.Nil, ErrConfigMismatch
+		if state != "active" && state != "superseded" {
+			return uuid.Nil, ErrVersionNotDeployable
 		}
 		return *explicit, nil
 	}
@@ -417,6 +421,19 @@ WHERE id = $1
 	if ct.RowsAffected() != 1 {
 		return ErrStaleWorker
 	}
+	eventType := "deployment.failed"
+	if status == StatusQueued {
+		eventType = "deployment.retry_scheduled"
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"status":        string(status),
+		"failure_code":  code,
+		"attempt_count": d.AttemptCount,
+		"max_attempts":  d.MaxAttempts,
+	})
+	if err := r.insertOutcomeAudit(ctx, tx, d, eventType, metadata, now); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -547,6 +564,15 @@ WHERE id = $1
 	if ct.RowsAffected() != 1 {
 		return ErrStaleWorker
 	}
+	metadata, _ := json.Marshal(map[string]any{
+		"status":                   string(StatusReady),
+		"configuration_version_id": d.ConfigurationVersionID.String(),
+		"readiness_probe_id":       strings.TrimSpace(res.ReadinessProbeID),
+		"readiness_observed_at":    observedAt.Format(time.RFC3339Nano),
+	})
+	if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.ready", metadata, now); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
@@ -558,6 +584,26 @@ INSERT INTO control_plane_audit_events (
 		uuid.Must(uuid.NewV7()), auth.ActorID, auth.OrgID, eventType, "deployment", targetID, requestID, meta, now,
 	)
 	return err
+}
+
+func (r *Repository) insertOutcomeAudit(ctx context.Context, tx pgx.Tx, d Deployment, eventType string, meta []byte, now time.Time) error {
+	ct, err := tx.Exec(ctx, `
+INSERT INTO control_plane_audit_events (
+  id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
+)
+SELECT $1, NULL, p.organization_id, $2, 'deployment', $3, $4, $5, $6
+FROM project_environments e
+JOIN projects p ON p.id = e.project_id
+WHERE e.id = $7`,
+		uuid.Must(uuid.NewV7()), eventType, d.ID.String(), d.ProviderRequestID, meta, now, d.EnvironmentID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 const deploymentColumns = `

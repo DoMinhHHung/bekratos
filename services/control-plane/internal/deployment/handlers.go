@@ -228,6 +228,8 @@ func mapErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, "no_active_configuration", "no active configuration version")
 	case errors.Is(err, ErrConfigMismatch):
 		writeErr(w, http.StatusConflict, "configuration_mismatch", "configuration version does not belong to environment")
+	case errors.Is(err, ErrVersionNotDeployable):
+		writeErr(w, http.StatusConflict, "configuration_not_deployable", "configuration version is not in a deployable state")
 	case errors.Is(err, ErrInvalidInput):
 		writeErr(w, http.StatusBadRequest, "invalid_input", "invalid input")
 	case errors.Is(err, ErrProviderUnavailable):
