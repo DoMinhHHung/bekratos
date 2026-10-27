@@ -13,28 +13,28 @@ import (
 )
 
 type Config struct {
-	Host               string
-	Port               int
-	DatabaseURL        string
-	LogLevel           string
-	BodyLimitBytes     int64
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	IdleTimeout        time.Duration
-	ShutdownTimeout    time.Duration
-	ReadinessTimeout   time.Duration
-	MigrateOnStartup   bool
-	IdentityJWKSURL    string
-	IdentityProfileURL string
-	RuntimeAPIURL      string
+	Host                string
+	Port                int
+	DatabaseURL         string
+	LogLevel            string
+	BodyLimitBytes      int64
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
+	ShutdownTimeout     time.Duration
+	ReadinessTimeout    time.Duration
+	MigrateOnStartup    bool
+	IdentityJWKSURL     string
+	IdentityProfileURL  string
+	RuntimeAPIURL       string
 	RuntimeServiceToken string
-	RuntimeHTTPTimeout time.Duration
-	JWTIssuer          string
-	JWTAudience        string
-	JWKSCacheTTL       time.Duration
-	JWKSHTTPTimeout    time.Duration
-	JWTLeeway          time.Duration
-	MaxRevocationDelay time.Duration
+	RuntimeHTTPTimeout  time.Duration
+	JWTIssuer           string
+	JWTAudience         string
+	JWKSCacheTTL        time.Duration
+	JWKSHTTPTimeout     time.Duration
+	JWTLeeway           time.Duration
+	MaxRevocationDelay  time.Duration
 }
 
 func Load() (*Config, error) {
@@ -43,19 +43,19 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Host:               getEnv("HOST", "0.0.0.0"),
-		Port:               8080,
-		LogLevel:           strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		BodyLimitBytes:     1 << 20,
-		ReadTimeout:        15 * time.Second,
-		WriteTimeout:       15 * time.Second,
-		IdleTimeout:        60 * time.Second,
-		ShutdownTimeout:    15 * time.Second,
-		ReadinessTimeout:   2 * time.Second,
-		MigrateOnStartup:   false,
-		JWKSCacheTTL:       60 * time.Second,
-		JWKSHTTPTimeout:    3 * time.Second,
-		JWTLeeway:          30 * time.Second,
+		Host              : getEnv("HOST", "0.0.0.0"),
+		Port              : 8080,
+		LogLevel          : strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		BodyLimitBytes    : 1 << 20,
+		ReadTimeout       : 15 * time.Second,
+		WriteTimeout      : 15 * time.Second,
+		IdleTimeout       : 60 * time.Second,
+		ShutdownTimeout   : 15 * time.Second,
+		ReadinessTimeout  : 2 * time.Second,
+		MigrateOnStartup  : false,
+		JWKSCacheTTL      : 60 * time.Second,
+		JWKSHTTPTimeout   : 3 * time.Second,
+		JWTLeeway         : 30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
 		RuntimeHTTPTimeout: 5 * time.Second,
 	}
@@ -222,8 +222,8 @@ func validateJWKSURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
-	host := strings.ToLower(u.Hostname())
-	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host    : = strings.ToLower(u.Hostname())
+	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
 		return nil
@@ -254,8 +254,8 @@ func validateRuntimeURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
-	host := strings.ToLower(u.Hostname())
-	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host    : = strings.ToLower(u.Hostname())
+	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
 		return nil
