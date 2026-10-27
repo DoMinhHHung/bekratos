@@ -43,19 +43,19 @@ func Load() (*Config, error) {
 	}
 
 	cfg := &Config{
-		Host:               getEnv("HOST", "0.0.0.0"),
-		Port:               8080,
-		LogLevel:           strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		BodyLimitBytes:     1 << 20,
-		ReadTimeout:        15 * time.Second,
-		WriteTimeout:       15 * time.Second,
-		IdleTimeout:        60 * time.Second,
-		ShutdownTimeout:    15 * time.Second,
-		ReadinessTimeout:   2 * time.Second,
-		MigrateOnStartup:   false,
-		JWKSCacheTTL:       60 * time.Second,
-		JWKSHTTPTimeout:    3 * time.Second,
-		JWTLeeway:          30 * time.Second,
+		Host: getEnv("HOST", "0.0.0.0"),
+		Port: 8080,
+		LogLevel: strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		BodyLimitBytes: 1 << 20,
+		ReadTimeout: 15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout: 60 * time.Second,
+		ShutdownTimeout: 15 * time.Second,
+		ReadinessTimeout: 2 * time.Second,
+		MigrateOnStartup: false,
+		JWKSCacheTTL: 60 * time.Second,
+		JWKSHTTPTimeout: 3 * time.Second,
+		JWTLeeway: 30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
 		RuntimeHTTPTimeout: 5 * time.Second,
 	}
@@ -164,8 +164,7 @@ func Load() (*Config, error) {
 
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
-	default:
-		return nil, fmt.Errorf("invalid LOG_LEVEL: %q", cfg.LogLevel)
+	default: return nil, fmt.Errorf("invalid LOG_LEVEL: %q", cfg.LogLevel)
 	}
 
 	if v := os.Getenv("MIGRATE_ON_STARTUP"); v != "" {
@@ -232,8 +231,7 @@ func validateJWKSURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
-	default:
-		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	default: return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
 }
 
@@ -264,7 +262,6 @@ func validateRuntimeURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
-	default:
-		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
+	default: return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
 	}
 }
