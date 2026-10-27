@@ -190,7 +190,7 @@ impl Config {
         let smtp_app_password = env::var("SMTP_APP_PASSWORD")
             .unwrap_or_default()
             .chars()
-            .filter(|c| !c.is_whitespace())
+            .filter(|c| *c != ' ')
             .collect::<String>();
         let control_plane_service_token =
             env::var("CONTROL_PLANE_SERVICE_TOKEN").unwrap_or_default();
@@ -206,9 +206,12 @@ impl Config {
             if smtp_port != 465 {
                 return Err(AppError::config("SMTP_PORT must be 465 for implicit TLS"));
             }
-            if smtp_username.trim().is_empty() || smtp_app_password.is_empty() {
+            if !valid_mailbox(&smtp_username)
+                || smtp_app_password.len() != 16
+                || !smtp_app_password.bytes().all(|b| b.is_ascii_alphanumeric())
+            {
                 return Err(AppError::config(
-                    "SMTP_USERNAME and SMTP_APP_PASSWORD are required when MAIL_PROVIDER=smtp",
+                    "SMTP_USERNAME must be an email address and SMTP_APP_PASSWORD must be a 16-character Google App Password",
                 ));
             }
             if smtp_username.contains('\r') || smtp_username.contains('\n') || smtp_app_password.contains('\r') || smtp_app_password.contains('\n') {
@@ -327,6 +330,17 @@ impl Config {
             jwks_cache_ttl_secs,
         })
     }
+}
+
+fn valid_mailbox(value: &str) -> bool {
+    let mut parts = value.split('@');
+    let local = parts.next().unwrap_or_default();
+    let domain = parts.next().unwrap_or_default();
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && parts.next().is_none()
+        && !value.bytes().any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
 }
 
 fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
