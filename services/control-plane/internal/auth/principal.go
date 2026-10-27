@@ -11,11 +11,11 @@ type contextKey int
 const principalKey contextKey = 1
 
 type Principal struct {
-	UserID    uuid.UUID
-	SessionID uuid.UUID
-	Issuer    string
-	Audience  string
-	ExpiresAt int64
+	UserID        uuid.UUID
+	SessionID     uuid.UUID
+	Issuer        string
+	Audience      string
+	ExpiresAt     int64
 	EmailVerified bool
 }
 
