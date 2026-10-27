@@ -2,9 +2,12 @@ package deployment
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
@@ -57,6 +60,12 @@ FOR UPDATE OF m, o, p, e`,
 	return parsed, nil
 }
 
+func requestFingerprint(mode TargetMode, versionChoice string) string {
+	payload := "v1|mode=" + string(mode) + "|version=" + versionChoice
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
 func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string) (CreateResult, error) {
 	if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
 		return CreateResult{}, fmt.Errorf("%w: idempotency_key", ErrInvalidInput)
@@ -68,6 +77,12 @@ func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInp
 	if mode != TargetModeShared {
 		return CreateResult{}, fmt.Errorf("%w: target_mode", ErrInvalidInput)
 	}
+
+	versionChoice := "active"
+	if in.ConfigurationVersionID != nil {
+		versionChoice = in.ConfigurationVersionID.String()
+	}
+	fp := requestFingerprint(mode, versionChoice)
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -86,6 +101,9 @@ func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInp
 	if existing, ok, err := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey); err != nil {
 		return CreateResult{}, err
 	} else if ok {
+		if existing.RequestFingerprint != fp {
+			return CreateResult{}, ErrConflict
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return CreateResult{}, err
 		}
@@ -103,13 +121,28 @@ func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInp
 	_, err = tx.Exec(ctx, `
 INSERT INTO deployments (
   id, environment_id, configuration_version_id, target_mode, provider, status,
-  attempt_count, max_attempts, idempotency_key, provider_request_id,
+  attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
   next_attempt_at, created_by_identity_user_id, created_at, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12)`,
+) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)`,
 		id, auth.EnvID, versionID, string(mode), string(ProviderUnavailable), string(StatusQueued),
-		in.IdempotencyKey, providerReq, now, auth.ActorID, now, now,
+		in.IdempotencyKey, fp, providerReq, now, auth.ActorID, now, now,
 	)
 	if err != nil {
+		if isUniqueViolation(err) {
+			existing, ok, findErr := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey)
+			if findErr != nil {
+				return CreateResult{}, findErr
+			}
+			if ok {
+				if existing.RequestFingerprint != fp {
+					return CreateResult{}, ErrConflict
+				}
+				if err := tx.Commit(ctx); err != nil {
+					return CreateResult{}, err
+				}
+				return CreateResult{Deployment: existing, Reused: true}, nil
+			}
+		}
 		return CreateResult{}, err
 	}
 
@@ -129,10 +162,19 @@ INSERT INTO deployments (
 	d := Deployment{
 		ID: id, EnvironmentID: auth.EnvID, ConfigurationVersionID: versionID,
 		TargetMode: mode, Provider: ProviderUnavailable, Status: StatusQueued,
-		MaxAttempts: 5, IdempotencyKey: in.IdempotencyKey, ProviderRequestID: providerReq,
-		NextAttemptAt: now, CreatedByUserID: auth.ActorID, CreatedAt: now, UpdatedAt: now,
+		MaxAttempts: 5, IdempotencyKey: in.IdempotencyKey, RequestFingerprint: fp,
+		ProviderRequestID: providerReq,
+		NextAttemptAt:     now, CreatedByUserID: auth.ActorID, CreatedAt: now, UpdatedAt: now,
 	}
 	return CreateResult{Deployment: d, Reused: false}, nil
+}
+
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "deployments_env_idempotency_unique") || strings.Contains(msg, "23505")
 }
 
 func (r *Repository) resolveVersionID(ctx context.Context, tx pgx.Tx, envID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
@@ -162,6 +204,18 @@ FOR UPDATE`, envID).Scan(&active)
 	}
 	if active == nil {
 		return uuid.Nil, ErrNoActiveConfig
+	}
+	var belongs bool
+	err = tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM environment_configuration_versions
+  WHERE id = $1 AND environment_id = $2
+)`, *active, envID).Scan(&belongs)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if !belongs {
+		return uuid.Nil, ErrConfigMismatch
 	}
 	return *active, nil
 }
@@ -252,12 +306,33 @@ func (r *Repository) Claim(ctx context.Context, workerID string, lease time.Dura
 
 	now := time.Now().UTC()
 	leaseUntil := now.Add(lease)
+
+	_, err = tx.Exec(ctx, `
+UPDATE deployments
+SET status = 'failed',
+    failure_code = 'max_attempts_exceeded',
+    failure_message = 'deployment exceeded maximum provider attempts',
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    finished_at = $1,
+    updated_at = $1,
+    next_attempt_at = $1
+WHERE status IN ('queued', 'provisioning')
+  AND attempt_count >= max_attempts
+  AND (lease_expires_at IS NULL OR lease_expires_at < $1)`,
+		now,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	rows, err := tx.Query(ctx, `
 WITH candidates AS (
   SELECT d.id AS deployment_id
   FROM deployments d
   WHERE d.status IN ('queued', 'provisioning')
     AND d.next_attempt_at <= $1
+    AND d.attempt_count < d.max_attempts
     AND (d.lease_expires_at IS NULL OR d.lease_expires_at < $1)
   ORDER BY d.next_attempt_at
   FOR UPDATE OF d SKIP LOCKED
@@ -275,7 +350,8 @@ FROM candidates c
 WHERE d.id = c.deployment_id
 RETURNING
   d.id, d.environment_id, d.configuration_version_id, d.target_mode, d.provider, d.status,
-  d.failure_code, d.failure_message, d.attempt_count, d.max_attempts, d.idempotency_key, d.provider_request_id,
+  d.failure_code, d.failure_message, d.attempt_count, d.max_attempts, d.idempotency_key,
+  d.request_fingerprint, d.provider_request_id,
   d.lease_owner, d.lease_expires_at, d.fencing_token, d.next_attempt_at,
   d.provider_url, d.provider_host, d.provider_region,
   d.created_by_identity_user_id, d.created_at, d.updated_at, d.started_at, d.ready_at, d.finished_at`,
@@ -314,6 +390,7 @@ func (r *Repository) MarkFailed(ctx context.Context, d Deployment, workerID stri
 	if terminal || d.AttemptCount >= d.MaxAttempts {
 		finished = &now
 		next = now
+		status = StatusFailed
 	} else {
 		status = StatusQueued
 	}
@@ -329,7 +406,10 @@ SET status = $2,
     updated_at = $7
 WHERE id = $1
   AND fencing_token = $8
-  AND lease_owner = $9`,
+  AND lease_owner = $9
+  AND status = 'provisioning'
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at > clock_timestamp()`,
 		d.ID, string(status), code, sanitizeMessage(message), next, finished, now, d.FencingToken, workerID,
 	)
 	if err != nil {
@@ -383,7 +463,9 @@ SET status = 'ready',
 WHERE id = $1
   AND fencing_token = $6
   AND lease_owner = $7
-  AND status = 'provisioning'`,
+  AND status = 'provisioning'
+  AND lease_expires_at IS NOT NULL
+  AND lease_expires_at > clock_timestamp()`,
 		d.ID, url, host, region, now, d.FencingToken, workerID,
 	)
 	if err != nil {
@@ -407,7 +489,7 @@ INSERT INTO control_plane_audit_events (
 
 const deploymentColumns = `
 id, environment_id, configuration_version_id, target_mode, provider, status,
-failure_code, failure_message, attempt_count, max_attempts, idempotency_key, provider_request_id,
+failure_code, failure_message, attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
 lease_owner, lease_expires_at, fencing_token, next_attempt_at,
 provider_url, provider_host, provider_region,
 created_by_identity_user_id, created_at, updated_at, started_at, ready_at, finished_at`
@@ -421,7 +503,7 @@ func scanDeployment(row interface {
 	var mode, provider, status string
 	err := row.Scan(
 		&d.ID, &d.EnvironmentID, &d.ConfigurationVersionID, &mode, &provider, &status,
-		&d.FailureCode, &d.FailureMessage, &d.AttemptCount, &d.MaxAttempts, &d.IdempotencyKey, &d.ProviderRequestID,
+		&d.FailureCode, &d.FailureMessage, &d.AttemptCount, &d.MaxAttempts, &d.IdempotencyKey, &d.RequestFingerprint, &d.ProviderRequestID,
 		&d.LeaseOwner, &d.LeaseExpiresAt, &d.FencingToken, &d.NextAttemptAt,
 		&d.ProviderURL, &d.ProviderHost, &d.ProviderRegion,
 		&d.CreatedByUserID, &d.CreatedAt, &d.UpdatedAt, &d.StartedAt, &d.ReadyAt, &d.FinishedAt,

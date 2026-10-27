@@ -347,3 +347,240 @@ func TestStaleWorkerCannotMarkReady(t *testing.T) {
 }
 
 var _ = org.RoleOwner
+
+func TestExpiredLeaseCannotMarkReadyOrFailed(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	repo := NewRepository(pool)
+	svc := NewService(repo, NewUnavailableProvider(), nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "expired-lease-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var d Deployment
+	found := false
+	for i := 0; i < 10 && !found; i++ {
+		claimed, err := repo.Claim(ctx, "worker-lease", 30*time.Second, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range claimed {
+			if c.ID == created.Deployment.ID {
+				d = c
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("deployment not claimed")
+	}
+
+	_, err = pool.Exec(ctx, `
+UPDATE deployments SET lease_expires_at = clock_timestamp() - interval '1 second'
+WHERE id = $1`, d.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.MarkReady(ctx, d, "worker-lease", ProvisionResult{
+		Outcome:       OutcomeSuccess,
+		EnvironmentID: envID,
+		VersionID:     versionID,
+		Host:          "host.example",
+	})
+	if !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("MarkReady after expiry: %v", err)
+	}
+	err = repo.MarkFailed(ctx, d, "worker-lease", "x", "y", true)
+	if !errors.Is(err, ErrStaleWorker) {
+		t.Fatalf("MarkFailed after expiry: %v", err)
+	}
+}
+
+func TestMaxAttemptsPreventsReclaim(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	repo := NewRepository(pool)
+	svc := NewService(repo, NewUnavailableProvider(), nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "max-attempts-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = pool.Exec(ctx, `
+UPDATE deployments
+SET attempt_count = max_attempts,
+    status = 'provisioning',
+    lease_owner = 'old-worker',
+    lease_expires_at = clock_timestamp() - interval '1 second'
+WHERE id = $1`, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	claimed, err := repo.Claim(ctx, "worker-max", 30*time.Second, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range claimed {
+		if c.ID == created.Deployment.ID {
+			t.Fatal("must not claim deployment at max_attempts")
+		}
+	}
+
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("status=%s; want failed after terminalize", got.Status)
+	}
+	if got.FailureCode != "max_attempts_exceeded" {
+		t.Fatalf("code=%s", got.FailureCode)
+	}
+	if got.LeaseOwner != nil {
+		t.Fatal("lease must be cleared on terminalize")
+	}
+}
+
+func TestIdempotencyConflictOnDifferentFingerprint(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	key := "fp-conflict-" + uuid.NewString()
+	first, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Reused {
+		t.Fatal("first create must not be reused")
+	}
+
+	otherVersion := uuid.Must(uuid.NewV7())
+	if _, err := pool.Exec(ctx, `
+INSERT INTO environment_configuration_versions (
+  id, environment_id, version_number, schema_revision, pin_revision,
+  manifest_format_version, manifest_canonical, manifest_sha256,
+  compatibility, state, created_by_user_id
+) VALUES (
+  $1, $2, 2, 1, 1, 1, '{}',
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+  'compatible', 'candidate', $3
+)`, otherVersion, envID, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey:         key,
+		ConfigurationVersionID: &otherVersion,
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("error=%v; want conflict on different fingerprint", err)
+	}
+
+	same, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: key,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same.Reused || same.Deployment.ID != first.Deployment.ID {
+		t.Fatal("same fingerprint must reuse")
+	}
+
+	explicitSame, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey:         key,
+		ConfigurationVersionID: &versionID,
+	})
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("omitted active vs explicit version must conflict: %v", err)
+	}
+	_ = explicitSame
+}
+
+func TestAmbiguousTimeoutDoesNotBecomeReady(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	rec := &RecordingProvider{
+		Err: context.DeadlineExceeded,
+	}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "timeout-amb-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = svc.ProcessOnce(ctx, "worker-timeout", 30*time.Second, 20)
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == StatusReady {
+		t.Fatal("timeout must not mark ready")
+	}
+	if got.Status != StatusFailed {
+		t.Fatalf("status=%s; want failed terminal for ambiguous timeout", got.Status)
+	}
+	if got.FailureCode != "provider_ambiguous" {
+		t.Fatalf("code=%s", got.FailureCode)
+	}
+	if len(rec.Calls) != 1 {
+		t.Fatalf("provider calls=%d", len(rec.Calls))
+	}
+	if rec.Calls[0].ProviderRequestID != created.Deployment.ProviderRequestID {
+		t.Fatal("stable provider request id required")
+	}
+}
+
+func TestValidLeaseAllowsMarkReady(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	repo := NewRepository(pool)
+	rec := &RecordingProvider{
+		Result: ProvisionResult{
+			Outcome:       OutcomeSuccess,
+			EnvironmentID: envID,
+			VersionID:     versionID,
+			Host:          "ok.example",
+			URL:           "https://ok.example",
+		},
+	}
+	svc := NewService(repo, rec, nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "valid-lease-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-valid", 30*time.Second, 20); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusReady {
+		t.Fatalf("status=%s", got.Status)
+	}
+}
+
+func TestNoActiveConfigRejected(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	if _, err := pool.Exec(ctx, `UPDATE project_environments SET active_configuration_version_id = NULL WHERE id = $1`, envID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "no-active-" + uuid.NewString(),
+	})
+	if !errors.Is(err, ErrNoActiveConfig) {
+		t.Fatalf("error=%v; want no active config", err)
+	}
+}
