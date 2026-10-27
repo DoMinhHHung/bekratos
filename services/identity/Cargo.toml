@@ -25,6 +25,13 @@ uuid = { version = "1", features = ["v7", "serde"] }
 chrono = { version = "0.4", features = ["serde", "clock"] }
 dotenvy = "0.15"
 http = "1"
+bytes = "1"
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+rustls = "0.23"
+tokio-rustls = "0.26"
+webpki-roots = "1.0"
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "postgres",
@@ -64,7 +71,6 @@ utoipa-swagger-ui = { version = "10", default-features = false, features = [
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
 tower = { version = "0.5", features = ["util"] }
-http-body-util = "0.1"
 
 # Full LTO + codegen-units=1 peaks at multi-GB RAM and OOMs on small builders
 # (Northflank free / shared CI). Thin LTO is enough for a small API binary.
