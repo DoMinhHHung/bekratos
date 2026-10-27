@@ -25,6 +25,7 @@ type Config struct {
 	ReadinessTimeout   time.Duration
 	MigrateOnStartup   bool
 	IdentityJWKSURL    string
+	IdentityProfileURL string
 	JWTIssuer          string
 	JWTAudience        string
 	JWKSCacheTTL       time.Duration
@@ -77,6 +78,21 @@ func Load() (*Config, error) {
 	}
 	if err := validateJWKSURL(cfg.IdentityJWKSURL); err != nil {
 		return nil, err
+	}
+
+	cfg.IdentityProfileURL = strings.TrimSpace(os.Getenv("IDENTITY_PROFILE_URL"))
+	if cfg.IdentityProfileURL == "" {
+		identityURL, err := url.Parse(cfg.IdentityJWKSURL)
+		if err != nil {
+			return nil, fmt.Errorf("IDENTITY_PROFILE_URL could not be derived from IDENTITY_JWKS_URL")
+		}
+		identityURL.Path = "/v1/me"
+		identityURL.RawQuery = ""
+		identityURL.Fragment = ""
+		cfg.IdentityProfileURL = identityURL.String()
+	}
+	if err := validateJWKSURL(cfg.IdentityProfileURL); err != nil {
+		return nil, fmt.Errorf("invalid IDENTITY_PROFILE_URL")
 	}
 
 	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
