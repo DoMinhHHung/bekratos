@@ -201,11 +201,21 @@ impl Config {
             .ok()
             .filter(|value| !value.is_empty());
         if let Some(token) = identity_service_api_token.as_ref() {
-            if token.len() < 32 || token.contains("change-me") || token.contains("replace-with") {
+            if token.len() < 32
+                || token.to_ascii_lowercase().contains("change-me")
+                || token.to_ascii_lowercase().contains("replace-with")
+                || token.to_ascii_lowercase().contains("example")
+            {
                 return Err(AppError::config(
                     "IDENTITY_SERVICE_API_TOKEN must contain at least 32 non-placeholder characters",
                 ));
             }
+        }
+
+        if app_env == "production" && identity_service_api_token.is_none() {
+            return Err(AppError::config(
+                "IDENTITY_SERVICE_API_TOKEN is required in production",
+            ));
         }
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
