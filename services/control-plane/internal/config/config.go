@@ -42,7 +42,7 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	cfg: = &Config{
+	cfg := &Config{
 		Host:               getEnv("HOST", "0.0.0.0"),
 		Port:               8080,
 		LogLevel:           strings.ToLower(getEnv("LOG_LEVEL", "info")),
@@ -164,7 +164,7 @@ func Load() (*Config, error) {
 
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
-	default: 
+	default:  
 		return nil, fmt.Errorf("invalid LOG_LEVEL: %q", cfg.LogLevel)
 	}
 
@@ -191,7 +191,7 @@ func loadDotEnv() error {
 		return nil
 	}
 
-	candidates: = []string{".env"}
+	candidates := []string{".env"}
 	if wd, err := os.Getwd(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(wd, ".env"),
@@ -222,8 +222,8 @@ func validateJWKSURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
-	host:     = strings.ToLower(u.Hostname())
-	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
 		return nil
@@ -232,13 +232,13 @@ func validateJWKSURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
-	default: 
+	default:  
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
 }
 
 func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
-	v: = os.Getenv(key)
+	v := os.Getenv(key)
 	if v == "" {
 		return fallback, nil
 	}
@@ -254,8 +254,8 @@ func validateRuntimeURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
-	host:     = strings.ToLower(u.Hostname())
-	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
 		return nil
@@ -264,7 +264,7 @@ func validateRuntimeURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
-	default: 
+	default:  
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
 	}
 }
