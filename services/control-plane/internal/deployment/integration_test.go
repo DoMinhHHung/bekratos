@@ -689,7 +689,6 @@ func TestProviderFailureIsSanitized(t *testing.T) {
 	}
 }
 
-
 func TestClaimScansNullableReadinessEvidence(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
@@ -716,15 +715,15 @@ func TestClaimScansNullableReadinessEvidence(t *testing.T) {
 func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
-		Outcome: OutcomeSuccess,
-		DeploymentID: uuid.Must(uuid.NewV7()),
-		EnvironmentID: envID,
-		VersionID: versionID,
+		Outcome:              OutcomeSuccess,
+		DeploymentID:         uuid.Must(uuid.NewV7()),
+		EnvironmentID:        envID,
+		VersionID:            versionID,
 		ReadinessProbePassed: true,
-		ReadinessProbeID: "readiness-for-another-deployment",
-		ReadinessObservedAt: time.Now().UTC(),
-		Host: "runtime.example.test",
-		URL: "https://runtime.example.test",
+		ReadinessProbeID:     "readiness-for-another-deployment",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "runtime.example.test",
+		URL:                  "https://runtime.example.test",
 	}}
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "wrong-deployment-evidence-" + uuid.NewString(),
@@ -750,14 +749,14 @@ func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
-		Outcome: OutcomeSuccess,
-		EnvironmentID: envID,
-		VersionID: versionID,
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
 		ReadinessProbePassed: true,
-		ReadinessProbeID: "mismatched-target",
-		ReadinessObservedAt: time.Now().UTC(),
-		Host: "evil.example",
-		URL: "https://runtime.example.test",
+		ReadinessProbeID:     "mismatched-target",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "evil.example",
+		URL:                  "https://runtime.example.test",
 	}}
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "mismatched-target-" + uuid.NewString(),
@@ -780,14 +779,14 @@ func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 func TestReadyRejectsNonHTTPSURL(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
-		Outcome: OutcomeSuccess,
-		EnvironmentID: envID,
-		VersionID: versionID,
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
 		ReadinessProbePassed: true,
-		ReadinessProbeID: "non-https-target",
-		ReadinessObservedAt: time.Now().UTC(),
-		Host: "runtime.example.test",
-		URL: "http://runtime.example.test",
+		ReadinessProbeID:     "non-https-target",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "runtime.example.test",
+		URL:                  "http://runtime.example.test",
 	}}
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "non-https-target-" + uuid.NewString(),
