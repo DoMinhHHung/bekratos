@@ -84,6 +84,28 @@ func TestCanonicalNumberEquivalence(t *testing.T) {
 	}
 }
 
+func TestCanonicalRFC8785NumberBoundaries(t *testing.T) {
+	cases := map[string]string{
+		"1":    "1",
+		"1.0":  "1",
+		"1e0":  "1",
+		"-0":   "0",
+		"1e-6": "0.000001",
+		"1e-7": "1e-7",
+		"1e20": "100000000000000000000",
+		"1e21": "1e+21",
+	}
+	for in, want := range cases {
+		got, err := canonicalizeNumber(in)
+		if err != nil {
+			t.Fatalf("%s: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("%s: got %q want %q", in, got, want)
+		}
+	}
+}
+
 func TestCanonicalNestedDefaultNumbers(t *testing.T) {
 	m1 := sampleManifest(t)
 	m2 := sampleManifest(t)

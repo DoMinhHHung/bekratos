@@ -19,13 +19,9 @@ type Service struct {
 	log     *slog.Logger
 }
 
-func NewService(repo *Repository, orgRepo *org.Repository, adapter ApplyAdapter, logs ...*slog.Logger) *Service {
+func NewService(repo *Repository, orgRepo *org.Repository, adapter ApplyAdapter, log *slog.Logger) *Service {
 	if adapter == nil {
 		adapter = NewUnavailableApplyAdapter()
-	}
-	var log *slog.Logger
-	if len(logs) > 0 {
-		log = logs[0]
 	}
 	if log == nil {
 		log = slog.Default()
@@ -152,7 +148,12 @@ func (s *Service) ProcessOnce(ctx context.Context, workerID string, lease time.D
 func (s *Service) processJob(ctx context.Context, job ApplyJob, lease time.Duration) error {
 	v, err := s.repo.GetVersion(ctx, job.EnvironmentID, job.ConfigurationVersionID)
 	if err != nil {
-		_ = s.repo.ReleaseJobTerminal(ctx, job, job.FencingToken, JobFailed, "version_missing", "configuration version missing")
+		if terminalErr := s.repo.ReleaseJobTerminal(ctx, job, job.FencingToken, JobFailed, "version_missing", "configuration version missing"); terminalErr != nil {
+			s.log.Warn("failed to terminalize job after missing version",
+				"job_id", job.ID.String(),
+				"error", terminalErr.Error(),
+			)
+		}
 		return err
 	}
 	if err := VerifyHash(v.ManifestCanonical, v.ManifestSHA256); err != nil {
@@ -195,21 +196,31 @@ func (s *Service) processJob(ctx context.Context, job ApplyJob, lease time.Durat
 		}
 		return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, code, msg)
 	}
-	if res.AppliedVersion != v.ID ||
+	if res.NeedsReconciliation {
+		return s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "runtime_reconciliation_required",
+			"runtime accepted apply but reported reconciliation required; active pointer not advanced")
+	}
+	if res.EnvironmentID != job.EnvironmentID ||
+		res.AppliedVersion != v.ID ||
 		res.AppliedSHA256 != v.ManifestSHA256 ||
-		(res.EnvironmentID != uuid.Nil && res.EnvironmentID != job.EnvironmentID) ||
 		!uuidPtrEqual(res.ExpectedActiveVersionID, v.ExpectedActiveVersionID) {
 		return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, "apply_ack_mismatch", "runtime acknowledgement did not match version hash environment or base")
 	}
 	err = s.repo.ActivateAfterApply(ctx, job, job.FencingToken, v.ManifestSHA256, job.ApplyRequestID)
 	if err != nil {
+		code := "activation_failed"
+		message := "runtime accepted apply but control-plane activation transaction failed; manual reconciliation required"
 		if errors.Is(err, ErrConflictRevision) || errors.Is(err, ErrStaleWorker) {
-			_ = s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "activation_conflict",
-				"runtime accepted apply but control-plane activation failed; manual reconciliation required")
-			return err
+			code = "activation_conflict"
+			message = "runtime accepted apply but control-plane activation failed; manual reconciliation required"
 		}
-		_ = s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "activation_failed",
-			"runtime accepted apply but control-plane activation transaction failed; manual reconciliation required")
+		if reconciliationErr := s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, code, message); reconciliationErr != nil {
+			s.log.Error("failed to mark job for reconciliation after activation failure",
+				"job_id", job.ID.String(),
+				"version_id", job.ConfigurationVersionID.String(),
+				"error", reconciliationErr.Error(),
+			)
+		}
 		return err
 	}
 	return nil

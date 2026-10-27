@@ -334,11 +334,28 @@ func (r *Repository) ClaimJobs(ctx context.Context, owner string, lease time.Dur
 
 	now := time.Now().UTC()
 	rows, err := tx.Query(ctx, `
-SELECT DISTINCT environment_id
-FROM environment_configuration_apply_jobs
-WHERE (state = 'queued' AND next_attempt_at <= $1)
-   OR (state = 'leased' AND lease_expires_at <= $1)
-ORDER BY environment_id
+SELECT environment_id
+FROM (
+    SELECT DISTINCT ON (j.environment_id)
+           j.environment_id,
+           j.next_attempt_at,
+           j.created_at,
+           j.id
+    FROM environment_configuration_apply_jobs j
+    WHERE (
+            (j.state = 'queued' AND j.next_attempt_at <= $1)
+         OR (j.state = 'leased' AND j.lease_expires_at <= $1)
+          )
+      AND NOT EXISTS (
+            SELECT 1
+            FROM environment_configuration_apply_jobs active
+            WHERE active.environment_id = j.environment_id
+              AND active.state = 'leased'
+              AND active.lease_expires_at > $1
+          )
+    ORDER BY j.environment_id, j.next_attempt_at, j.created_at, j.id
+) candidates
+ORDER BY next_attempt_at, created_at, id
 LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
@@ -586,6 +603,12 @@ WHERE id = $1 AND state IN ($6, $7)`,
 }
 
 func (r *Repository) MarkJobNeedsReconciliation(ctx context.Context, job ApplyJob, fencing int64, code, message string) error {
+	if code == "" {
+		code = "reconciliation_required"
+	}
+	if message == "" {
+		message = "runtime apply requires reconciliation; active pointer not advanced"
+	}
 	return r.MarkJobBlocked(ctx, job, fencing, code, message)
 }
 

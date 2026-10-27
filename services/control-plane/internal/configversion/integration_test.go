@@ -3,7 +3,9 @@ package configversion
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -58,10 +60,18 @@ INSERT INTO project_environments (id, project_id, slug, kind, status)
 VALUES ($1,$2,'development','development','active')`, envID, projectID); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET state = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+WHERE environment_id = $1 AND state IN ('queued', 'leased')`, envID); err != nil {
+			t.Errorf("clean up configuration apply jobs: %v", err)
+		}
+	})
 
 	orgRepo := org.NewRepository(pool)
 	repo := NewRepository(pool)
-	svc := NewService(repo, orgRepo, NewUnavailableApplyAdapter())
+	svc := NewService(repo, orgRepo, NewUnavailableApplyAdapter(), slog.Default())
 	return ctx, pool, svc, userID, orgID, projectID, envID
 }
 
@@ -85,14 +95,20 @@ func createConfirmedVersion(t *testing.T, ctx context.Context, svc *Service, pri
 			t.Fatal(err)
 		}
 	}
+	if _, err := svc.repo.pool.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET next_attempt_at = '-infinity'
+WHERE configuration_version_id = $1 AND state = 'queued'`, result.Version.ID); err != nil {
+		t.Fatal(err)
+	}
 	return result.Version
 }
 
 func TestClaimJobsSerializesApplyPerEnvironment(t *testing.T) {
-	ctx, _, svc, userID, orgID, projectID, envID := setupEnv(t)
+	ctx, pool, svc, userID, orgID, projectID, envID := setupEnv(t)
 	principal := auth.Principal{UserID: userID}
-	createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "claim-a-"+uuid.NewString())
-	createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "claim-b-"+uuid.NewString())
+	v1 := createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "claim-a-"+uuid.NewString())
+	v2 := createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "claim-b-"+uuid.NewString())
 
 	type result struct {
 		jobs []ApplyJob
@@ -111,15 +127,54 @@ func TestClaimJobsSerializesApplyPerEnvironment(t *testing.T) {
 	wg.Wait()
 	close(results)
 
-	totalClaimed := 0
+	var claimed []ApplyJob
 	for res := range results {
 		if res.err != nil {
 			t.Fatal(res.err)
 		}
-		totalClaimed += len(res.jobs)
+		for _, job := range res.jobs {
+			if job.EnvironmentID == envID {
+				claimed = append(claimed, job)
+			}
+		}
 	}
-	if totalClaimed != 1 {
-		t.Fatalf("claimed %d jobs for one environment; want exactly 1", totalClaimed)
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d jobs for one environment; want exactly 1", len(claimed))
+	}
+	if claimed[0].ConfigurationVersionID != v1.ID && claimed[0].ConfigurationVersionID != v2.ID {
+		t.Fatalf("claimed unexpected version %s", claimed[0].ConfigurationVersionID)
+	}
+	if _, err := pool.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET state = 'cancelled', lease_owner = NULL, lease_expires_at = NULL, updated_at = now()
+WHERE environment_id = $1 AND state IN ('queued', 'leased')`, envID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimJobsSkipsBusyEnvironmentAndClaimsReadyEnvironment(t *testing.T) {
+	ctx, _, busyService, busyUser, busyOrg, busyProject, busyEnv := setupEnv(t)
+	createConfirmedVersion(t, ctx, busyService, auth.Principal{UserID: busyUser}, busyOrg, busyProject, busyEnv, "busy-"+uuid.NewString())
+	busyJobs, err := busyService.repo.ClaimJobs(ctx, "busy-owner", time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(busyJobs) != 1 || busyJobs[0].EnvironmentID != busyEnv {
+		t.Fatalf("precondition: expected lease on busy env %s, got %+v", busyEnv, busyJobs)
+	}
+
+	_, _, readyService, readyUser, readyOrg, readyProject, readyEnv := setupEnv(t)
+	createConfirmedVersion(t, ctx, readyService, auth.Principal{UserID: readyUser}, readyOrg, readyProject, readyEnv, "ready-"+uuid.NewString())
+
+	claimed, err := busyService.repo.ClaimJobs(ctx, "ready-owner", time.Minute, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 {
+		t.Fatalf("claimed %d jobs; want 1 from ready environment", len(claimed))
+	}
+	if claimed[0].EnvironmentID != readyEnv {
+		t.Fatalf("claimed env %s; want ready env %s", claimed[0].EnvironmentID, readyEnv)
 	}
 }
 
@@ -176,13 +231,11 @@ func TestRetryAttemptsExhaustToTerminalFailure(t *testing.T) {
 		if err := svc.repo.ScheduleJobRetry(ctx, jobs[0], jobs[0].FencingToken, "transient", "temporary runtime error", time.Minute); err != nil {
 			t.Fatal(err)
 		}
-		if attempt < 5 {
-			if _, err := pool.Exec(ctx, `
+		if _, err := pool.Exec(ctx, `
 UPDATE environment_configuration_apply_jobs
 SET next_attempt_at = now() - interval '1 second'
-WHERE id = $1`, jobs[0].ID); err != nil {
-				t.Fatal(err)
-			}
+WHERE configuration_version_id = $1 AND state = 'queued'`, version.ID); err != nil {
+			t.Fatal(err)
 		}
 	}
 
@@ -208,11 +261,13 @@ func TestApplyAcknowledgementMismatchBlocksWithoutActivation(t *testing.T) {
 	repo := NewRepository(pool)
 	adapter := &RecordingApplyAdapter{
 		Result: ApplyResult{
-			Accepted:      true,
-			AppliedSHA256: "invalid-acknowledgement",
+			Accepted:       true,
+			EnvironmentID:  envID,
+			AppliedVersion: uuid.Must(uuid.NewV7()),
+			AppliedSHA256:  strings.Repeat("a", 64),
 		},
 	}
-	svc := NewService(repo, orgRepo, adapter)
+	svc := NewService(repo, orgRepo, adapter, slog.Default())
 	version := createConfirmedVersion(t, ctx, svc, auth.Principal{UserID: userID}, orgID, projectID, envID, "ack-"+uuid.NewString())
 
 	if _, err := svc.ProcessOnce(ctx, "ack-worker", time.Minute, 1); err != nil {
@@ -234,6 +289,86 @@ WHERE id = $1`, envID).Scan(&active); err != nil {
 	}
 	if active != nil {
 		t.Fatalf("invalid acknowledgement activated version %s", *active)
+	}
+}
+
+func TestApplyNeedsReconciliationDoesNotActivate(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID := setupEnv(t)
+	orgRepo := org.NewRepository(pool)
+	repo := NewRepository(pool)
+	adapter := &RecordingApplyAdapter{}
+	svc := NewService(repo, orgRepo, adapter, slog.Default())
+	principal := auth.Principal{UserID: userID}
+	version := createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "recon-"+uuid.NewString())
+	adapter.Result = ApplyResult{
+		Accepted:                true,
+		EnvironmentID:           envID,
+		AppliedVersion:          version.ID,
+		AppliedSHA256:           version.ManifestSHA256,
+		ExpectedActiveVersionID: nil,
+		NeedsReconciliation:     true,
+	}
+
+	if _, err := svc.ProcessOnce(ctx, "recon-worker", time.Minute, 5); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetVersion(ctx, principal, orgID, projectID, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateBlocked {
+		t.Fatalf("version state=%s; want blocked", got.State)
+	}
+	var active *uuid.UUID
+	if err := pool.QueryRow(ctx, `
+SELECT active_configuration_version_id
+FROM project_environments
+WHERE id = $1`, envID).Scan(&active); err != nil {
+		t.Fatal(err)
+	}
+	if active != nil {
+		t.Fatalf("active pointer advanced to %s despite reconciliation requirement", *active)
+	}
+	job, err := svc.repo.GetJobByVersion(ctx, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.LastErrorCode != "runtime_reconciliation_required" {
+		t.Fatalf("job error code=%q; want runtime_reconciliation_required", job.LastErrorCode)
+	}
+}
+
+func TestApplyMissingEnvironmentAckBlocks(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID := setupEnv(t)
+	orgRepo := org.NewRepository(pool)
+	repo := NewRepository(pool)
+	adapter := &RecordingApplyAdapter{}
+	svc := NewService(repo, orgRepo, adapter, slog.Default())
+	principal := auth.Principal{UserID: userID}
+	version := createConfirmedVersion(t, ctx, svc, principal, orgID, projectID, envID, "noenv-"+uuid.NewString())
+	adapter.Result = ApplyResult{
+		Accepted:                true,
+		AppliedVersion:          version.ID,
+		AppliedSHA256:           version.ManifestSHA256,
+		ExpectedActiveVersionID: nil,
+	}
+
+	if _, err := svc.ProcessOnce(ctx, "noenv-worker", time.Minute, 5); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.GetVersion(ctx, principal, orgID, projectID, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != StateBlocked {
+		t.Fatalf("version state=%s; want blocked", got.State)
+	}
+	job, err := svc.repo.GetJobByVersion(ctx, envID, version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.LastErrorCode != "apply_ack_mismatch" {
+		t.Fatalf("job error code=%q; want apply_ack_mismatch", job.LastErrorCode)
 	}
 }
 
@@ -336,7 +471,7 @@ func TestConfigVersionActivationWithRecordingAdapter(t *testing.T) {
 	repo := NewRepository(pool)
 
 	adapter := &RecordingApplyAdapter{}
-	svc := NewService(repo, orgRepo, adapter)
+	svc := NewService(repo, orgRepo, adapter, slog.Default())
 
 	res, err := svc.CreateCandidate(ctx, principal, orgID, projectID, envID, CreateCandidateInput{
 		ExpectedSchemaRevision: 0,
@@ -358,9 +493,11 @@ func TestConfigVersionActivationWithRecordingAdapter(t *testing.T) {
 	}
 
 	adapter.Result = ApplyResult{
-		Accepted:       true,
-		AppliedVersion: v.ID,
-		AppliedSHA256:  v.ManifestSHA256,
+		Accepted:                true,
+		EnvironmentID:           envID,
+		AppliedVersion:          v.ID,
+		AppliedSHA256:           v.ManifestSHA256,
+		ExpectedActiveVersionID: nil,
 	}
 
 	if _, err := svc.ProcessOnce(ctx, "activate-worker", 15*time.Second, 5); err != nil {

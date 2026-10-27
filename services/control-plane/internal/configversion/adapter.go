@@ -62,26 +62,14 @@ func (a *RecordingApplyAdapter) Apply(ctx context.Context, req ApplyRequest) (Ap
 	if a.Conditional {
 		if !uuidPtrEqual(a.CurrentActive, req.ExpectedActiveVersionID) {
 			return ApplyResult{
-				Accepted: false,
-				Code:     "stale_base",
-				Message:  "expected active version no longer matches runtime base",
+				Accepted:      false,
+				Code:          "stale_base",
+				Message:       "expected active version no longer matches runtime base",
+				EnvironmentID: req.EnvironmentID,
 			}, nil
 		}
 	}
-	res := a.Result
-	if res.EnvironmentID == uuid.Nil {
-		res.EnvironmentID = req.EnvironmentID
-	}
-	if res.AppliedVersion == uuid.Nil {
-		res.AppliedVersion = req.VersionID
-	}
-	if res.AppliedSHA256 == "" {
-		res.AppliedSHA256 = req.ManifestSHA256
-	}
-	if res.ExpectedActiveVersionID == nil {
-		res.ExpectedActiveVersionID = req.ExpectedActiveVersionID
-	}
-	return res, nil
+	return a.Result, nil
 }
 
 type RetryableApplyError struct {

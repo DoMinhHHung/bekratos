@@ -169,7 +169,7 @@ func canonicalizeNumber(raw string) (string, error) {
 	if raw == "" {
 		return "", fmt.Errorf("%w: empty number", ErrValidation)
 	}
-	f, _, err := big.ParseFloat(raw, 10, 64, big.ToNearestEven)
+	f, _, err := big.ParseFloat(raw, 10, 53, big.ToNearestEven)
 	if err != nil {
 		return "", fmt.Errorf("%w: invalid number %q", ErrValidation, raw)
 	}
@@ -184,7 +184,35 @@ func canonicalizeFloat(f float64) (string, error) {
 	if f == 0 {
 		return "0", nil
 	}
-	return strconv.FormatFloat(f, 'g', -1, 64), nil
+	return formatECMANumber(f), nil
+}
+
+func formatECMANumber(f float64) string {
+	abs := math.Abs(f)
+	if abs < 1e-6 || abs >= 1e21 {
+		return normalizeExponent(strconv.FormatFloat(f, 'e', -1, 64))
+	}
+	return strconv.FormatFloat(f, 'f', -1, 64)
+}
+
+func normalizeExponent(s string) string {
+	parts := strings.SplitN(s, "e", 2)
+	if len(parts) != 2 {
+		return s
+	}
+	coefficient, exponent := parts[0], parts[1]
+	if strings.HasPrefix(exponent, "-") {
+		digits := strings.TrimLeft(exponent[1:], "0")
+		if digits == "" {
+			digits = "0"
+		}
+		return coefficient + "e-" + digits
+	}
+	digits := strings.TrimLeft(strings.TrimPrefix(exponent, "+"), "0")
+	if digits == "" {
+		digits = "0"
+	}
+	return coefficient + "e+" + digits
 }
 
 func DecodeManifest(canonical string) (Manifest, error) {
