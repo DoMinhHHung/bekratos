@@ -59,12 +59,13 @@ func (h *Handlers) listReleases(w http.ResponseWriter, r *http.Request) {
 				"module_slug": d.ModuleSlug, "version_constraint": d.VersionConstraint, "required": d.Required,
 			})
 		}
-		out = append(out, map[string]any{
+		item := map[string]any{
 			"id": rel.ID.String(), "module_slug": rel.ModuleSlug, "version": rel.Version,
 			"runtime_compat": rel.RuntimeCompat, "api_contract_version": rel.APIContractVersion,
 			"dependencies": deps, "conflicts": rel.Conflicts,
-			"published_at": rel.PublishedAt.UTC().Format(time.RFC3339Nano),
-		})
+			"published_at": publishedAtJSON(rel.PublishedAt),
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
@@ -166,6 +167,14 @@ func writeErr(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]string{"error": code, "message": message})
 }
 
+func publishedAtJSON(publishedAt *time.Time) *string {
+	if publishedAt == nil || publishedAt.IsZero() {
+		return nil
+	}
+	formatted := publishedAt.UTC().Format(time.RFC3339Nano)
+	return &formatted
+}
+
 func mapErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -184,6 +193,8 @@ func mapErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, "module_conflict", "module conflict")
 	case errors.Is(err, ErrMissingDependency), errors.Is(err, ErrUnknownModule), errors.Is(err, ErrUnknownRelease):
 		writeErr(w, http.StatusBadRequest, "missing_dependency", "missing or unknown dependency")
+	case errors.Is(err, ErrSearchBudget):
+		writeErr(w, http.StatusConflict, "resolution_budget_exceeded", "dependency resolution limit exceeded")
 	case errors.Is(err, ErrUnsatisfiable), errors.Is(err, ErrIncompatible), errors.Is(err, ErrDuplicateRelease):
 		writeErr(w, http.StatusConflict, "unsatisfiable", "unsatisfiable constraint")
 	default:

@@ -22,7 +22,7 @@ Platform users are people who sign into Bekratos Dashboard. Their credentials, s
 
 Project end-users are customers of apps built on Bekratos. Their accounts and sessions belong to each project's Runtime Auth module, scoped to project and environment. They are not platform members.
 
-The inspected Identity API publishes JWKS at GET /v1/jwks. Visible claims include sub, sid, iss, aud, iat, nbf and exp. There is no confirmed active-session introspection API or verified-primary-email claim. Before production management routes are enabled, define an authenticated service-to-service contract for active session checks and verified email lookup, or document an explicit bounded revocation/email limitation. Never trust X-User-ID or an unverified email supplied by a caller.
+The inspected Identity API publishes JWKS at GET /v1/jwks. Its ES256 access-token contract includes sub, sid, iss, aud, iat, nbf and exp; the default access-token TTL is 900 seconds. Control Plane requires those claims, validates nbf with configured clock skew, and treats MAX_REVOCATION_DELAY as the maximum time from iat through which a token can be accepted. Expiration leeway cannot extend acceptance beyond that deadline. There is no confirmed active-session introspection API or verified-primary-email claim. Before production management routes are enabled, define an authenticated service-to-service contract for active session checks and verified email lookup, or document an explicit bounded revocation/email limitation. Never trust X-User-ID or an unverified email supplied by a caller.
 
 ## 3. Core decisions
 
@@ -50,13 +50,15 @@ OrganizationInvitation fields: id, organization_id, email_normalized, role, toke
 
 ### Project and Environment
 
-Project fields: id, organization_id, slug, display_name, description, status, created_by_identity_user_id, timestamps, archived_at. Unique organization_id + slug. Project is a primary ownership/quota boundary.
+Project fields: id, organization_id, slug, display_name, description, status, created_by_identity_user_id, timestamps, archived_at. Unique organization_id + slug. Project is a primary ownership/quota boundary. A child route requires active organization, project and environment state; reads do not remain available after a parent or environment is archived.
 
 Environment fields: id, project_id, slug, kind, status, active_configuration_version_id, active_deployment_id, timestamps. Kinds: development, staging, production, custom. Unique project_id + slug. Runtime data, keys, configuration versions and deployments are environment-scoped. Never authorize based on a caller-supplied project/environment ID without checking ownership. MVP may create one development environment automatically but schema should support multiple.
 
 ### Module catalog
 
-Module is a stable identity such as auth, ecommerce, payment or storage. ModuleRelease is immutable and identified by module slug + semver. A release defines runtime compatibility, API contract version, config schema/defaults, entity templates, protected fields, generated endpoint declarations, required/optional dependencies, conflicts, migrations, policy templates and documentation.
+Module is a stable identity such as auth, ecommerce, payment or storage. A release is authored as an unpublished draft, which may be edited with dependency/conflict metadata until its one-way publication transition. Publication validates the release and its metadata atomically; published releases and their dependency/conflict metadata are immutable and identified by module slug + canonical semver. Drafts are not included in public module/release listings, resolution candidates or pins. A release defines runtime compatibility, API contract version, config schema/defaults, entity templates, protected fields, generated endpoint declarations, required/optional dependencies, conflicts, migrations, policy templates and documentation.
+
+The Phase 5 Control Plane target is global and server-authoritative: runtime version `1.0.0` and API contract version `1`. Resolution and pin validation use those same values; callers cannot select a different compatibility target. A future target change requires a coordinated runtime/API release and an update to this contract.
 
 For MVP only reviewed first-party releases are trusted. Module migrations are reviewed program artifacts; modules cannot embed arbitrary user SQL/code.
 
@@ -137,13 +139,14 @@ Route details and OpenAPI must be frozen in the phase that implements each featu
 
 1. No cross-organization/project/environment read or mutation by changing a URL/body ID.
 2. Current membership, not stale JWT roles, determines permissions.
-3. Platform and project end-user identities use separate types, audiences and credentials.
-4. Management JWT validation includes fixed algorithm, signature, issuer, audience, expiry, not-before and key ID, plus explicit active-session revocation semantics.
-5. API-key/invitation plaintext is never stored or logged; secret shown once.
-6. Module dependency/version resolution is deterministic.
-7. System/module-owned fields cannot be removed or mutated.
-8. Relationships cannot silently cross tenant/environment boundaries.
-9. Failed candidate never replaces the active healthy config version.
-10. Destructive operations are explicit and are not promised to be rollback-safe.
-11. Deployment is not ready without real Runtime/provider confirmation.
-12. Tests cover last-owner concurrency, invitation replay, key revocation, module conflicts, config version races, cross-tenant isolation and failed apply/deploy.
+3. Owner/admin can create, update and archive projects and environments; developer can create/update projects and create environments but cannot archive; viewer is read-only; billing has no project/environment access.
+4. Platform and project end-user identities use separate types, audiences and credentials.
+5. Management JWT validation includes fixed algorithm, signature, issuer, audience, expiry, not-before and key ID, plus explicit bounded token-expiry revocation semantics.
+6. API-key/invitation plaintext is never stored or logged; secret shown once.
+7. Module dependency/version resolution is deterministic.
+8. System/module-owned fields cannot be removed or mutated.
+9. Relationships cannot silently cross tenant/environment boundaries.
+10. Failed candidate never replaces the active healthy config version.
+11. Destructive operations are explicit and are not promised to be rollback-safe.
+12. Deployment is not ready without real Runtime/provider confirmation.
+13. Tests cover last-owner concurrency, invitation replay, key revocation, module conflicts, config version races, cross-tenant isolation and failed apply/deploy.

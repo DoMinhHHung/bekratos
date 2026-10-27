@@ -35,10 +35,6 @@ fn derive_legacy(kek: &str) -> [u8; 32] {
 }
 
 impl KeyEncryptor {
-    /// Tạo bộ mã hóa khóa với cơ chế dẫn xuất hiện tại và cơ chế cũ để giải mã.
-    ///
-    /// Hàm không kiểm tra độ dài hay độ mạnh của `kek`; bên gọi chịu trách nhiệm
-    /// xác thực cấu hình trước khi sử dụng.
     pub fn new(kek: &str) -> AppResult<Self> {
         let v1 = derive_v1(kek);
         let legacy = derive_legacy(kek);
@@ -48,9 +44,6 @@ impl KeyEncryptor {
         })
     }
 
-    /// Mã hóa dữ liệu bằng XChaCha20-Poly1305 với nonce ngẫu nhiên 24 byte.
-    ///
-    /// Trả nonce nối với bản mã có thẻ xác thực; trả `Internal` nếu mã hóa thất bại.
     pub fn encrypt(&self, plaintext: &[u8]) -> AppResult<Vec<u8>> {
         let mut nonce_bytes = [0u8; 24];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
@@ -65,17 +58,10 @@ impl KeyEncryptor {
         Ok(out)
     }
 
-    /// Giải mã dữ liệu có nonce 24 byte ở đầu, hỗ trợ cả khóa dẫn xuất cũ.
-    ///
-    /// Trả `Internal` nếu dữ liệu quá ngắn hoặc không xác thực được bằng cả hai khóa.
     pub fn decrypt(&self, data: &[u8]) -> AppResult<Vec<u8>> {
         self.decrypt_and_was_legacy(data).map(|(plain, _)| plain)
     }
 
-    /// Giải mã và trả dữ liệu gốc cùng cờ `true` nếu phải dùng cơ chế dẫn xuất cũ.
-    ///
-    /// Trả `Internal` nếu dữ liệu ngắn hơn 25 byte hoặc cả hai khóa đều không
-    /// xác thực được bản mã.
     pub fn decrypt_and_was_legacy(&self, data: &[u8]) -> AppResult<(Vec<u8>, bool)> {
         if data.len() < 25 {
             return Err(AppError::Internal);

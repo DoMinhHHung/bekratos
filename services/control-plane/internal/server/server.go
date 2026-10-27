@@ -31,7 +31,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	projectHandlers := project.NewHandlers(projectSvc)
 
 	moduleRepo := module.NewRepository(pool)
-	moduleSvc := module.NewService(moduleRepo, orgRepo, projectRepo)
+	moduleSvc := module.NewService(moduleRepo)
 	moduleHandlers := module.NewHandlers(moduleSvc)
 
 	mux := http.NewServeMux()

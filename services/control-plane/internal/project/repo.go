@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -48,9 +49,7 @@ func (r *Repository) CreateProjectWithDevEnv(ctx context.Context, p Project, env
 	if orgStatus != "active" {
 		return ErrForbidden
 	}
-	switch role {
-	case "owner", "admin":
-	default:
+	if !roleAllows(role, org.Role.CanCreateProject) {
 		return ErrForbidden
 	}
 
@@ -149,9 +148,7 @@ func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID, actorU
 	if orgStatus != "active" {
 		return Project{}, ErrForbidden
 	}
-	switch role {
-	case "owner", "admin":
-	default:
+	if !roleAllows(role, org.Role.CanUpdateProject) {
 		return Project{}, ErrForbidden
 	}
 
@@ -198,9 +195,7 @@ func (r *Repository) ArchiveProject(ctx context.Context, orgID, projectID, actor
 	if orgStatus != "active" {
 		return ErrForbidden
 	}
-	switch role {
-	case "owner", "admin":
-	default:
+	if !roleAllows(role, org.Role.CanArchiveProject) {
 		return ErrForbidden
 	}
 	tag, err := tx.Exec(ctx, `
@@ -241,9 +236,7 @@ func (r *Repository) CreateEnvironment(ctx context.Context, orgID uuid.UUID, env
 	if orgStatus != "active" {
 		return ErrForbidden
 	}
-	switch role {
-	case "owner", "admin", "developer":
-	default:
+	if !roleAllows(role, org.Role.CanCreateEnvironment) {
 		return ErrForbidden
 	}
 	err = tx.QueryRow(ctx, `
@@ -331,9 +324,7 @@ func (r *Repository) ArchiveEnvironment(ctx context.Context, orgID, projectID, e
 	if orgStatus != "active" {
 		return ErrForbidden
 	}
-	switch role {
-	case "owner", "admin":
-	default:
+	if !roleAllows(role, org.Role.CanArchiveEnvironment) {
 		return ErrForbidden
 	}
 	err = tx.QueryRow(ctx, `
@@ -342,6 +333,9 @@ func (r *Repository) ArchiveEnvironment(ctx context.Context, orgID, projectID, e
 	).Scan(&projectStatus)
 	if err != nil {
 		return ErrNotFound
+	}
+	if projectStatus != "active" {
+		return ErrForbidden
 	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE project_environments
@@ -394,6 +388,11 @@ func scanEnvs(rows pgx.Rows) ([]Environment, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func roleAllows(role string, allow func(org.Role) bool) bool {
+	parsed, ok := org.ParseRole(role)
+	return ok && allow(parsed)
 }
 
 func insertProjectAudit(ctx context.Context, tx pgx.Tx, actor, orgID uuid.UUID, eventType, targetType, targetID, requestID string, metadata []byte) error {

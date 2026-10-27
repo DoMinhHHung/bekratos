@@ -5,8 +5,6 @@ import (
 	"errors"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
-	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
-	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/project"
 	"github.com/google/uuid"
 )
 
@@ -24,13 +22,11 @@ const (
 )
 
 type Service struct {
-	repo        *Repository
-	orgRepo     *org.Repository
-	projectRepo *project.Repository
+	repo *Repository
 }
 
-func NewService(repo *Repository, orgRepo *org.Repository, projectRepo *project.Repository) *Service {
-	return &Service{repo: repo, orgRepo: orgRepo, projectRepo: projectRepo}
+func NewService(repo *Repository) *Service {
+	return &Service{repo: repo}
 }
 
 func (s *Service) ListModules(ctx context.Context) ([]Module, error) {
@@ -41,26 +37,27 @@ func (s *Service) ListReleases(ctx context.Context, moduleSlug string) ([]Releas
 	return s.repo.ListReleases(ctx, moduleSlug)
 }
 
+func productionResolveOptions() ResolveOptions {
+	return ResolveOptions{
+		RuntimeVersion: platformRuntimeVersion,
+		APIContract:    platformAPIContract,
+	}
+}
+
 func (s *Service) ResolveSelections(ctx context.Context, selections []Selection) (ResolutionPlan, error) {
 	modules, err := s.repo.ListModules(ctx)
 	if err != nil {
 		return ResolutionPlan{}, err
 	}
-	releases, err := s.repo.ListReleases(ctx, "")
+	releases, err := s.repo.ListPublishedReleases(ctx, "")
 	if err != nil {
 		return ResolutionPlan{}, err
 	}
-	return ResolveWithOptions(modules, releases, selections, ResolveOptions{
-		RuntimeVersion: platformRuntimeVersion,
-		APIContract:    platformAPIContract,
-	})
+	return ResolveWithOptions(modules, releases, selections, productionResolveOptions())
 }
 
 func (s *Service) ListPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) ([]Pin, int64, error) {
-	if _, _, err := s.authorizeEnv(ctx, principal, orgID, projectID, envID, false); err != nil {
-		return nil, 0, err
-	}
-	return s.repo.ListPins(ctx, envID)
+	return s.repo.ListPinsAuthorized(ctx, orgID, projectID, envID, principal.UserID)
 }
 
 func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, selections []Selection, expectedRevision *int64, requestID string) (ResolutionPlan, error) {
@@ -97,42 +94,4 @@ func (s *Service) SetPins(ctx context.Context, principal auth.Principal, orgID, 
 	}
 	plan.Revision = newRev
 	return plan, nil
-}
-
-func (s *Service) authorizeEnv(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, write bool) (project.Project, project.Environment, error) {
-	m, err := s.orgRepo.GetActiveMembership(ctx, orgID, principal.UserID)
-	if err != nil {
-		return project.Project{}, project.Environment{}, ErrNotFound
-	}
-	if write {
-		if !m.Role.CanUpdateProject() {
-			return project.Project{}, project.Environment{}, ErrForbidden
-		}
-	} else {
-		if !m.Role.CanReadProject() {
-			return project.Project{}, project.Environment{}, ErrForbidden
-		}
-	}
-	o, err := s.orgRepo.GetOrganization(ctx, orgID)
-	if err != nil {
-		return project.Project{}, project.Environment{}, ErrNotFound
-	}
-	if write && o.Status != org.OrgStatusActive {
-		return project.Project{}, project.Environment{}, ErrInactive
-	}
-	p, err := s.projectRepo.GetProject(ctx, orgID, projectID)
-	if err != nil {
-		return project.Project{}, project.Environment{}, ErrNotFound
-	}
-	if write && p.Status != project.StatusActive {
-		return project.Project{}, project.Environment{}, ErrInactive
-	}
-	e, err := s.projectRepo.GetEnvironment(ctx, projectID, envID)
-	if err != nil {
-		return project.Project{}, project.Environment{}, ErrNotFound
-	}
-	if write && e.Status != project.StatusActive {
-		return project.Project{}, project.Environment{}, ErrInactive
-	}
-	return p, e, nil
 }

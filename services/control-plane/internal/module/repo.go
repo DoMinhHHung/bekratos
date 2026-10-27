@@ -5,14 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrConflictRevision = errors.New("revision conflict")
+var (
+	ErrConflictRevision        = errors.New("revision conflict")
+	ErrInvalidRelease          = errors.New("invalid release metadata")
+	ErrReleaseAlreadyPublished = errors.New("release already published")
+)
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -25,7 +32,12 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 func (r *Repository) ListModules(ctx context.Context) ([]Module, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT slug, display_name, description, created_at
-		FROM modules ORDER BY slug`)
+		FROM modules m
+		WHERE EXISTS (
+			SELECT 1 FROM module_releases r
+			WHERE r.module_slug = m.slug AND r.published_at IS NOT NULL
+		)
+		ORDER BY slug`)
 	if err != nil {
 		return nil, err
 	}
@@ -41,11 +53,16 @@ func (r *Repository) ListModules(ctx context.Context) ([]Module, error) {
 	return out, rows.Err()
 }
 
+func (r *Repository) ListPublishedReleases(ctx context.Context, moduleSlug string) ([]Release, error) {
+	return r.ListReleases(ctx, moduleSlug)
+}
+
 func (r *Repository) ListReleases(ctx context.Context, moduleSlug string) ([]Release, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, module_slug, version, runtime_compat, api_contract_version, metadata, published_at
 		FROM module_releases
-		WHERE ($1 = '' OR module_slug = $1)
+		WHERE published_at IS NOT NULL
+		  AND ($1 = '' OR module_slug = $1)
 		ORDER BY module_slug, version DESC`, moduleSlug)
 	if err != nil {
 		return nil, err
@@ -68,6 +85,181 @@ func (r *Repository) ListReleases(ctx context.Context, moduleSlug string) ([]Rel
 	}
 	sortReleasesSemver(out)
 	return out, nil
+}
+
+func (r *Repository) CreateDraft(ctx context.Context, release Release) error {
+	if release.ID == uuid.Nil || release.PublishedAt != nil || validateReleaseMetadata(release) != nil {
+		return ErrInvalidRelease
+	}
+	if release.Metadata == nil {
+		release.Metadata = []byte("{}")
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO module_releases (
+			id, module_slug, version, runtime_compat, api_contract_version, metadata, published_at
+		) VALUES ($1, $2, $3, $4, $5, $6, NULL)`,
+		release.ID, release.ModuleSlug, release.Version, release.RuntimeCompat,
+		release.APIContractVersion, release.Metadata)
+	if err != nil {
+		return err
+	}
+	for _, dependency := range release.Dependencies {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO module_release_dependencies (
+				release_id, dep_module_slug, version_constraint, required
+			) VALUES ($1, $2, $3, $4)`,
+			release.ID, dependency.ModuleSlug, dependency.VersionConstraint, dependency.Required)
+		if err != nil {
+			return err
+		}
+	}
+	for _, conflict := range release.Conflicts {
+		_, err = tx.Exec(ctx, `
+			INSERT INTO module_release_conflicts (release_id, conflict_module_slug)
+			VALUES ($1, $2)`, release.ID, conflict)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) PublishRelease(ctx context.Context, releaseID uuid.UUID) (time.Time, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var release Release
+	err = tx.QueryRow(ctx, `
+		SELECT id, module_slug, version, runtime_compat, api_contract_version, metadata, published_at
+		FROM module_releases
+		WHERE id = $1
+		FOR UPDATE`, releaseID,
+	).Scan(&release.ID, &release.ModuleSlug, &release.Version, &release.RuntimeCompat,
+		&release.APIContractVersion, &release.Metadata, &release.PublishedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	if release.PublishedAt != nil {
+		return time.Time{}, ErrReleaseAlreadyPublished
+	}
+
+	release.Dependencies, err = loadDependenciesTx(ctx, tx, release.ID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	release.Conflicts, err = loadConflictsTx(ctx, tx, release.ID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := validateReleaseMetadata(release); err != nil {
+		return time.Time{}, err
+	}
+
+	var publishedAt time.Time
+	err = tx.QueryRow(ctx, `
+		UPDATE module_releases SET published_at = now()
+		WHERE id = $1 AND published_at IS NULL
+		RETURNING published_at`, release.ID,
+	).Scan(&publishedAt)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return time.Time{}, err
+	}
+	return publishedAt, nil
+}
+
+func validateReleaseMetadata(release Release) error {
+	version, err := ParseVersion(release.Version)
+	if err != nil || version.String() != release.Version {
+		return ErrInvalidRelease
+	}
+	if strings.TrimSpace(release.ModuleSlug) == "" || strings.TrimSpace(release.RuntimeCompat) != release.RuntimeCompat {
+		return ErrInvalidRelease
+	}
+	if _, err := ParseConstraint(release.RuntimeCompat); err != nil {
+		return ErrInvalidRelease
+	}
+	apiVersion, err := strconv.ParseUint(release.APIContractVersion, 10, 32)
+	if err != nil || apiVersion == 0 || strconv.FormatUint(apiVersion, 10) != release.APIContractVersion {
+		return ErrInvalidRelease
+	}
+	if len(release.Metadata) > 0 {
+		var metadata map[string]any
+		if err := json.Unmarshal(release.Metadata, &metadata); err != nil || metadata == nil {
+			return ErrInvalidRelease
+		}
+	}
+	for _, dependency := range release.Dependencies {
+		if strings.TrimSpace(dependency.ModuleSlug) == "" || dependency.ModuleSlug == release.ModuleSlug {
+			return ErrInvalidRelease
+		}
+		if _, err := ParseConstraint(dependency.VersionConstraint); err != nil {
+			return ErrInvalidRelease
+		}
+	}
+	for _, conflict := range release.Conflicts {
+		if strings.TrimSpace(conflict) == "" || conflict == release.ModuleSlug {
+			return ErrInvalidRelease
+		}
+	}
+	return nil
+}
+
+func loadDependenciesTx(ctx context.Context, tx pgx.Tx, releaseID uuid.UUID) ([]Dependency, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT dep_module_slug, version_constraint, required
+		FROM module_release_dependencies
+		WHERE release_id = $1
+		ORDER BY dep_module_slug`, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var dependencies []Dependency
+	for rows.Next() {
+		var dependency Dependency
+		if err := rows.Scan(&dependency.ModuleSlug, &dependency.VersionConstraint, &dependency.Required); err != nil {
+			return nil, err
+		}
+		dependencies = append(dependencies, dependency)
+	}
+	return dependencies, rows.Err()
+}
+
+func loadConflictsTx(ctx context.Context, tx pgx.Tx, releaseID uuid.UUID) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		SELECT conflict_module_slug
+		FROM module_release_conflicts
+		WHERE release_id = $1
+		ORDER BY conflict_module_slug`, releaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var conflicts []string
+	for rows.Next() {
+		var conflict string
+		if err := rows.Scan(&conflict); err != nil {
+			return nil, err
+		}
+		conflicts = append(conflicts, conflict)
+	}
+	return conflicts, rows.Err()
 }
 
 func sortReleasesSemver(releases []Release) {
@@ -173,52 +365,87 @@ func (r *Repository) loadConflicts(ctx context.Context, releaseID uuid.UUID) ([]
 	return out, rows.Err()
 }
 
-func (r *Repository) ListPins(ctx context.Context, envID uuid.UUID) ([]Pin, int64, error) {
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+func (r *Repository) ListPinsAuthorized(ctx context.Context, orgID, projectID, envID, actorUserID uuid.UUID) ([]Pin, int64, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer tx.Rollback(ctx)
 
-	rows, err := tx.Query(ctx, `
-		SELECT p.environment_id, p.module_slug, p.release_id, r.version, p.pinned_at, p.updated_at
-		FROM environment_module_pins p
-		INNER JOIN module_releases r ON r.id = p.release_id AND r.module_slug = p.module_slug
-		WHERE p.environment_id = $1
-		ORDER BY p.module_slug`, envID)
+	var orgStatus string
+	var role string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1
+		  AND m.identity_user_id = $2
+		  AND m.status = 'active'
+		FOR SHARE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, ErrNotFound
+	}
 	if err != nil {
 		return nil, 0, err
 	}
-	var out []Pin
-	for rows.Next() {
-		var p Pin
-		if err := rows.Scan(&p.EnvironmentID, &p.ModuleSlug, &p.ReleaseID, &p.Version, &p.PinnedAt, &p.UpdatedAt); err != nil {
-			rows.Close()
-			return nil, 0, err
-		}
-		out = append(out, p)
+	parsed, ok := org.ParseRole(role)
+	if !ok || !parsed.CanReadEnvironment() {
+		return nil, 0, ErrForbidden
 	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
+	if orgStatus != "active" {
+		return nil, 0, ErrInactive
+	}
+
+	var projectStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT status FROM projects
+		WHERE id = $1 AND organization_id = $2
+		FOR SHARE`, projectID, orgID,
+	).Scan(&projectStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, ErrNotFound
+	}
+	if err != nil {
 		return nil, 0, err
 	}
-	var rev int64
+	if projectStatus != "active" {
+		return nil, 0, ErrInactive
+	}
+
+	var environmentStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT status FROM project_environments
+		WHERE id = $1 AND project_id = $2
+		FOR SHARE`, envID, projectID,
+	).Scan(&environmentStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, 0, ErrNotFound
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+	if environmentStatus != "active" {
+		return nil, 0, ErrInactive
+	}
+
+	pins, err := r.listPinsTx(ctx, tx, envID)
+	if err != nil {
+		return nil, 0, err
+	}
+	var revision int64
 	err = tx.QueryRow(ctx, `
 		SELECT revision FROM environment_module_pin_state WHERE environment_id = $1`, envID,
-	).Scan(&rev)
+	).Scan(&revision)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, 0, err
-		}
-		return out, 0, nil
-	}
-	if err != nil {
+		revision = 0
+	} else if err != nil {
 		return nil, 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, 0, err
 	}
-	return out, rev, nil
+	return pins, revision, nil
 }
 
 func (r *Repository) ReplacePins(ctx context.Context, envID uuid.UUID, pins []Pin, expectedRevision *int64, actorUserID *uuid.UUID, orgID *uuid.UUID, requestID string) (int64, error) {
@@ -316,6 +543,8 @@ func (r *Repository) listPinsTx(ctx context.Context, tx pgx.Tx, envID uuid.UUID)
 		SELECT p.environment_id, p.module_slug, p.release_id, r.version, p.pinned_at, p.updated_at
 		FROM environment_module_pins p
 		INNER JOIN module_releases r ON r.id = p.release_id AND r.module_slug = p.module_slug
+		                           AND r.published_at IS NOT NULL
+		                           AND r.published_at IS NOT NULL
 		WHERE p.environment_id = $1
 		ORDER BY p.module_slug`, envID)
 	if err != nil {
@@ -357,9 +586,8 @@ func (r *Repository) ReplacePinsAuthorized(ctx context.Context, orgID, projectID
 	if orgStatus != "active" {
 		return 0, ErrInactive
 	}
-	switch role {
-	case "owner", "admin", "developer":
-	default:
+	parsed, ok := org.ParseRole(role)
+	if !ok || !parsed.CanUpdateProject() {
 		return 0, ErrForbidden
 	}
 
@@ -417,6 +645,19 @@ func (r *Repository) ReplacePinsAuthorized(ctx context.Context, orgID, projectID
 	}
 	now := time.Now().UTC()
 	for _, pin := range pins {
+		var publishedAt *time.Time
+		err = tx.QueryRow(ctx, `
+			SELECT published_at
+			FROM module_releases
+			WHERE id = $1 AND module_slug = $2
+			FOR SHARE`, pin.ReleaseID, pin.ModuleSlug,
+		).Scan(&publishedAt)
+		if err != nil {
+			return 0, ErrInvalidInput
+		}
+		if publishedAt == nil {
+			return 0, ErrInvalidInput
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO environment_module_pins (environment_id, module_slug, release_id, pinned_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5)`,

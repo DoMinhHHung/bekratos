@@ -8,11 +8,13 @@ import (
 )
 
 func ParseVersion(s string) (*semver.Version, error) {
-	s = strings.TrimSpace(s)
 	if s == "" {
 		return nil, fmt.Errorf("empty version")
 	}
-	v, err := semver.StrictNewVersion(strings.TrimPrefix(s, "v"))
+	if s != strings.TrimSpace(s) || strings.HasPrefix(s, "v") || strings.HasPrefix(s, "V") {
+		return nil, fmt.Errorf("invalid version")
+	}
+	v, err := semver.StrictNewVersion(s)
 	if err != nil {
 		return nil, fmt.Errorf("invalid version")
 	}

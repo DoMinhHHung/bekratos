@@ -214,8 +214,12 @@ func (s *Service) ListEnvironments(ctx context.Context, principal auth.Principal
 	if !m.Role.CanReadEnvironment() {
 		return nil, ErrForbidden
 	}
-	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
+	proj, err := s.repo.GetProject(ctx, orgID, projectID)
+	if err != nil {
 		return nil, err
+	}
+	if proj.Status != StatusActive {
+		return nil, ErrForbidden
 	}
 	return s.repo.ListEnvironments(ctx, projectID)
 }
@@ -228,10 +232,21 @@ func (s *Service) GetEnvironment(ctx context.Context, principal auth.Principal, 
 	if !m.Role.CanReadEnvironment() {
 		return Environment{}, ErrForbidden
 	}
-	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
+	proj, err := s.repo.GetProject(ctx, orgID, projectID)
+	if err != nil {
 		return Environment{}, err
 	}
-	return s.repo.GetEnvironment(ctx, projectID, envID)
+	if proj.Status != StatusActive {
+		return Environment{}, ErrForbidden
+	}
+	env, err := s.repo.GetEnvironment(ctx, projectID, envID)
+	if err != nil {
+		return Environment{}, err
+	}
+	if env.Status != StatusActive {
+		return Environment{}, ErrForbidden
+	}
+	return env, nil
 }
 
 func (s *Service) ArchiveEnvironment(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) error {
@@ -245,8 +260,12 @@ func (s *Service) ArchiveEnvironment(ctx context.Context, principal auth.Princip
 	if err := s.requireActiveOrg(ctx, orgID); err != nil {
 		return err
 	}
-	if _, err := s.repo.GetProject(ctx, orgID, projectID); err != nil {
+	proj, err := s.repo.GetProject(ctx, orgID, projectID)
+	if err != nil {
 		return err
+	}
+	if proj.Status != StatusActive {
+		return ErrForbidden
 	}
 	return s.repo.ArchiveEnvironment(ctx, orgID, projectID, envID, principal.UserID, requestid.FromContext(ctx))
 }

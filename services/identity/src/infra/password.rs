@@ -12,10 +12,6 @@ pub struct PasswordPolicy {
 }
 
 impl PasswordPolicy {
-    /// Tạo chính sách Argon2id với bộ nhớ tính bằng KiB.
-    ///
-    /// Trả `Config` nếu bộ nhớ dưới 19.456 KiB, số vòng lặp dưới 2, độ song song dưới 1
-    /// hoặc bộ tham số không hợp lệ với Argon2.
     pub fn new(memory_kib: u32, iterations: u32, parallelism: u32) -> AppResult<Self> {
         if memory_kib < 19_456 {
             return Err(AppError::config("ARGON2_MEMORY_KIB must be >= 19456"));
@@ -41,10 +37,6 @@ impl PasswordPolicy {
         Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
     }
 
-    /// Băm mật khẩu bằng Argon2id với salt ngẫu nhiên và trả chuỗi PHC.
-    ///
-    /// Chấp nhận độ dài từ 8 đến 128 byte, kể cả hai đầu; ngoài khoảng này trả
-    /// `BadRequest`. Lỗi tạo bộ băm hoặc băm mật khẩu được trả dưới dạng `Internal`.
     pub fn hash(&self, password: &str) -> AppResult<String> {
         if !(8..=128).contains(&password.len()) {
             return Err(AppError::BadRequest(
@@ -60,10 +52,6 @@ impl PasswordPolicy {
         Ok(hash)
     }
 
-    /// Đối chiếu mật khẩu với chuỗi PHC và trả `Ok(true)` khi khớp.
-    ///
-    /// Mật khẩu sai, hash không hợp lệ và lỗi xác minh đều được chuyển thành
-    /// `Ok(false)`; hàm không kiểm tra giới hạn độ dài như khi tạo hash.
     pub fn verify(&self, password: &str, password_hash: &str) -> AppResult<bool> {
         let parsed = match PasswordHash::new(password_hash) {
             Ok(p) => p,
@@ -80,8 +68,6 @@ impl PasswordPolicy {
         }
     }
 
-    /// Trả `true` khi chuỗi PHC không đọc được, thuật toán khác Argon2id
-    /// hoặc các tham số bộ nhớ, vòng lặp, độ song song khác chính sách hiện tại.
     pub fn needs_rehash(&self, password_hash: &str) -> bool {
         let Ok(parsed) = PasswordHash::new(password_hash) else {
             return true;
@@ -109,9 +95,6 @@ impl PasswordPolicy {
 }
 
 impl PasswordPolicy {
-    /// Thực hiện xác minh mật khẩu giả để giảm khác biệt thời gian khi đăng nhập.
-    ///
-    /// Bỏ qua kết quả và lỗi xác minh; không bảo đảm thời gian chạy cố định.
     pub fn dummy_verify(&self) {
         let hash = format!(
             "$argon2id$v=19$m={},t={},p=1$c29tZXNhbHRzb21lc2FsdA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",

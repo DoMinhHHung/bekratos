@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/Masterminds/semver/v3"
 )
@@ -17,7 +18,12 @@ var (
 	ErrUnknownRelease    = errors.New("unknown release")
 	ErrDuplicateRelease  = errors.New("duplicate release")
 	ErrIncompatible      = errors.New("incompatible release")
-	maxSearchDepth       = 64
+	ErrSearchBudget      = errors.New("search budget exceeded")
+)
+
+const (
+	maxSearchDepth = 64
+	maxSearchNodes = 2048
 )
 
 type ResolveOptions struct {
@@ -40,13 +46,14 @@ func buildIndex(modules []Module, releases []Release) (*catalogIndex, error) {
 	}
 	seen := make(map[string]map[string]struct{})
 	for _, r := range releases {
-		if _, err := ParseVersion(r.Version); err != nil {
+		parsed, err := ParseVersion(r.Version)
+		if err != nil {
 			return nil, fmt.Errorf("%w: %s@%s", ErrUnknownRelease, r.ModuleSlug, r.Version)
 		}
 		if seen[r.ModuleSlug] == nil {
 			seen[r.ModuleSlug] = make(map[string]struct{})
 		}
-		key := r.Version
+		key := strings.SplitN(parsed.String(), "+", 2)[0]
 		if _, ok := seen[r.ModuleSlug][key]; ok {
 			return nil, fmt.Errorf("%w: %s@%s", ErrDuplicateRelease, r.ModuleSlug, r.Version)
 		}
@@ -79,16 +86,21 @@ func Resolve(modules []Module, releases []Release, selections []Selection) (Reso
 }
 
 func ResolveWithOptions(modules []Module, releases []Release, selections []Selection, opts ResolveOptions) (ResolutionPlan, error) {
+	return resolveWithBudget(modules, releases, selections, opts, maxSearchNodes)
+}
+
+func resolveWithBudget(modules []Module, releases []Release, selections []Selection, opts ResolveOptions, maxNodes int) (ResolutionPlan, error) {
 	idx, err := buildIndex(modules, releases)
 	if err != nil {
 		return ResolutionPlan{}, err
 	}
-	sort.SliceStable(selections, func(i, j int) bool {
-		return selections[i].ModuleSlug < selections[j].ModuleSlug
+	selected := append([]Selection(nil), selections...)
+	sort.SliceStable(selected, func(i, j int) bool {
+		return selected[i].ModuleSlug < selected[j].ModuleSlug
 	})
 
 	constraints := make(map[string][]string)
-	for _, sel := range selections {
+	for _, sel := range selected {
 		if sel.ModuleSlug == "" {
 			return ResolutionPlan{}, ErrUnknownModule
 		}
@@ -102,9 +114,9 @@ func ResolveWithOptions(modules []Module, releases []Release, selections []Selec
 		constraints[sel.ModuleSlug] = append(constraints[sel.ModuleSlug], c)
 	}
 
-	chosen := make(map[string]Release)
-	stack := make(map[string]bool)
-	if err := search(idx, constraints, chosen, stack, opts, 0); err != nil {
+	budget := maxNodes
+	chosen, err := search(idx, constraints, map[string]Release{}, map[string]bool{}, opts, 0, &budget)
+	if err != nil {
 		return ResolutionPlan{}, err
 	}
 
@@ -126,7 +138,15 @@ func ResolveWithOptions(modules []Module, releases []Release, selections []Selec
 	return plan, nil
 }
 
-func search(idx *catalogIndex, constraints map[string][]string, chosen map[string]Release, stack map[string]bool, opts ResolveOptions, depth int) error {
+func search(
+	idx *catalogIndex,
+	constraints map[string][]string,
+	chosen map[string]Release,
+	stack map[string]bool,
+	opts ResolveOptions,
+	depth int,
+	budget *int,
+) (map[string]Release, error) {
 	var next string
 	for slug := range constraints {
 		if _, ok := chosen[slug]; !ok {
@@ -136,181 +156,205 @@ func search(idx *catalogIndex, constraints map[string][]string, chosen map[strin
 		}
 	}
 	if next == "" {
-		return nil
+		return cloneChosen(chosen), nil
 	}
 	if depth > maxSearchDepth {
-		return fmt.Errorf("%w: search depth exceeded", ErrUnsatisfiable)
+		return nil, fmt.Errorf("%w: search depth exceeded", ErrUnsatisfiable)
 	}
 	if stack[next] {
-		return fmt.Errorf("%w: %s", ErrCycle, next)
+		return nil, fmt.Errorf("%w: %s", ErrCycle, next)
 	}
 	if _, ok := idx.modules[next]; !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownModule, next)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownModule, next)
 	}
 	list := idx.releases[next]
 	if len(list) == 0 {
-		return fmt.Errorf("%w: %s", ErrMissingDependency, next)
+		return nil, fmt.Errorf("%w: %s", ErrMissingDependency, next)
 	}
 
 	cs, err := intersectConstraints(constraints[next])
 	if err != nil {
-		return fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
+		return nil, fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
 	}
 
 	candidates := make([]Release, 0, len(list))
 	for _, rel := range list {
-		v, err := ParseVersion(rel.Version)
-		if err != nil {
-			continue
+		if budget == nil || *budget <= 0 {
+			return nil, ErrSearchBudget
 		}
-		if !cs.Check(v) {
-			continue
-		}
-		if rel.RuntimeCompat == "" {
-			continue
-		}
-		if _, err := ParseConstraint(rel.RuntimeCompat); err != nil {
-			continue
-		}
-		if rel.APIContractVersion == "" {
-			continue
-		}
-		if opts.RuntimeVersion != "" {
-			rc, err := ParseConstraint(rel.RuntimeCompat)
-			if err != nil {
-				continue
-			}
-			rv, err := ParseVersion(opts.RuntimeVersion)
-			if err != nil || !rc.Check(rv) {
-				continue
-			}
-		}
-		if opts.APIContract != "" && rel.APIContractVersion != opts.APIContract {
-			continue
-		}
-		conflicted := false
-		for _, c := range rel.Conflicts {
-			if _, ok := chosen[c]; ok {
-				conflicted = true
-				break
-			}
-		}
-		if conflicted {
-			continue
-		}
-		for _, existing := range chosen {
-			for _, c := range existing.Conflicts {
-				if c == next {
-					conflicted = true
-					break
-				}
-			}
-			if conflicted {
-				break
-			}
-		}
-		if conflicted {
+		*budget--
+		if !candidateFits(rel, next, cs, chosen, opts) {
 			continue
 		}
 		candidates = append(candidates, rel)
 	}
 	if len(candidates) == 0 {
-		return fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
+		return nil, fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return releaseLess(candidates[j], candidates[i])
 	})
 
 	var lastErr error
-	stack[next] = true
 	for _, cand := range candidates {
-		childConstraints := cloneConstraints(constraints)
+		branchConstraints := cloneConstraints(constraints)
+		branchChosen := cloneChosen(chosen)
+		branchStack := cloneStack(stack)
+		branchStack[next] = true
 		ok := true
 		for _, dep := range cand.Dependencies {
 			if !dep.Required {
 				continue
 			}
-			if _, err := ParseConstraint(dep.VersionConstraint); err != nil {
+			if err := applyRequiredDependency(dep, branchChosen, branchStack, branchConstraints); err != nil {
 				ok = false
-				lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+				lastErr = err
 				break
 			}
-			if stack[dep.ModuleSlug] {
-				ok = false
-				lastErr = fmt.Errorf("%w: %s", ErrCycle, dep.ModuleSlug)
-				break
-			}
-			if existing, exists := chosen[dep.ModuleSlug]; exists {
-				ev, err := ParseVersion(existing.Version)
-				if err != nil {
-					ok = false
-					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
-					break
-				}
-				dc, _ := ParseConstraint(dep.VersionConstraint)
-				if !dc.Check(ev) {
-					ok = false
-					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
-					break
-				}
-				continue
-			}
-			childConstraints[dep.ModuleSlug] = append(childConstraints[dep.ModuleSlug], dep.VersionConstraint)
 		}
 		if !ok {
 			continue
 		}
-		chosen[next] = cand
-		if err := search(idx, childConstraints, chosen, stack, opts, depth+1); err != nil {
-			delete(chosen, next)
+		branchChosen[next] = cand
+		resolved, err := search(idx, branchConstraints, branchChosen, branchStack, opts, depth+1, budget)
+		if err != nil {
 			lastErr = err
+			if errors.Is(err, ErrSearchBudget) {
+				return nil, err
+			}
 			continue
 		}
-		for _, dep := range cand.Dependencies {
-			if dep.Required {
-				continue
+		resolved, err = applyOptionalDependencies(idx, cand, resolved, branchConstraints, branchStack, opts, depth, budget)
+		if err != nil {
+			lastErr = err
+			if errors.Is(err, ErrSearchBudget) {
+				return nil, err
 			}
-			if existing, already := chosen[dep.ModuleSlug]; already {
-				ev, err := ParseVersion(existing.Version)
-				if err != nil {
-					delete(chosen, next)
-					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
-					ok = false
-					break
-				}
-				dc, err := ParseConstraint(dep.VersionConstraint)
-				if err != nil || !dc.Check(ev) {
-					delete(chosen, next)
-					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
-					ok = false
-					break
-				}
-				continue
-			}
-			if _, err := ParseConstraint(dep.VersionConstraint); err != nil {
-				continue
-			}
-			optConstraints := cloneConstraints(childConstraints)
-			optConstraints[dep.ModuleSlug] = append(optConstraints[dep.ModuleSlug], dep.VersionConstraint)
-			optChosen := cloneChosen(chosen)
-			optStack := cloneStack(stack)
-			if err := search(idx, optConstraints, optChosen, optStack, opts, depth+1); err == nil {
-				for k, v := range optChosen {
-					chosen[k] = v
-				}
-			}
-		}
-		if !ok {
 			continue
 		}
-		delete(stack, next)
+		return resolved, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
+}
+
+func candidateFits(rel Release, next string, cs *semver.Constraints, chosen map[string]Release, opts ResolveOptions) bool {
+	v, err := ParseVersion(rel.Version)
+	if err != nil {
+		return false
+	}
+	if !cs.Check(v) {
+		return false
+	}
+	if rel.RuntimeCompat == "" {
+		return false
+	}
+	if _, err := ParseConstraint(rel.RuntimeCompat); err != nil {
+		return false
+	}
+	if rel.APIContractVersion == "" {
+		return false
+	}
+	if opts.RuntimeVersion != "" {
+		rc, err := ParseConstraint(rel.RuntimeCompat)
+		if err != nil {
+			return false
+		}
+		rv, err := ParseVersion(opts.RuntimeVersion)
+		if err != nil || !rc.Check(rv) {
+			return false
+		}
+	}
+	if opts.APIContract != "" && rel.APIContractVersion != opts.APIContract {
+		return false
+	}
+	for _, c := range rel.Conflicts {
+		if _, ok := chosen[c]; ok {
+			return false
+		}
+	}
+	for _, existing := range chosen {
+		for _, c := range existing.Conflicts {
+			if c == next {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func applyRequiredDependency(dep Dependency, chosen map[string]Release, stack map[string]bool, constraints map[string][]string) error {
+	if _, err := ParseConstraint(dep.VersionConstraint); err != nil {
+		return fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+	}
+	if stack[dep.ModuleSlug] {
+		return fmt.Errorf("%w: %s", ErrCycle, dep.ModuleSlug)
+	}
+	if existing, exists := chosen[dep.ModuleSlug]; exists {
+		ev, err := ParseVersion(existing.Version)
+		if err != nil {
+			return fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+		}
+		dc, err := ParseConstraint(dep.VersionConstraint)
+		if err != nil || !dc.Check(ev) {
+			return fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+		}
 		return nil
 	}
-	delete(stack, next)
-	if lastErr != nil {
-		return lastErr
+	constraints[dep.ModuleSlug] = append(constraints[dep.ModuleSlug], dep.VersionConstraint)
+	return nil
+}
+
+func applyOptionalDependencies(
+	idx *catalogIndex,
+	cand Release,
+	resolved map[string]Release,
+	baseConstraints map[string][]string,
+	stack map[string]bool,
+	opts ResolveOptions,
+	depth int,
+	budget *int,
+) (map[string]Release, error) {
+	current := resolved
+	currentConstraints := cloneConstraints(baseConstraints)
+	for _, dep := range cand.Dependencies {
+		if dep.Required {
+			continue
+		}
+		if stack[dep.ModuleSlug] {
+			continue
+		}
+		if existing, already := current[dep.ModuleSlug]; already {
+			ev, err := ParseVersion(existing.Version)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+			}
+			dc, err := ParseConstraint(dep.VersionConstraint)
+			if err != nil || !dc.Check(ev) {
+				return nil, fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+			}
+			continue
+		}
+		if _, err := ParseConstraint(dep.VersionConstraint); err != nil {
+			continue
+		}
+		optConstraints := cloneConstraints(currentConstraints)
+		optConstraints[dep.ModuleSlug] = append(optConstraints[dep.ModuleSlug], dep.VersionConstraint)
+		optChosen := cloneChosen(current)
+		optStack := cloneStack(stack)
+		optResolved, err := search(idx, optConstraints, optChosen, optStack, opts, depth+1, budget)
+		if err == nil {
+			current = optResolved
+			currentConstraints = optConstraints
+			continue
+		}
+		if errors.Is(err, ErrSearchBudget) {
+			return nil, err
+		}
 	}
-	return fmt.Errorf("%w: %s", ErrUnsatisfiable, next)
+	return current, nil
 }
 
 func intersectConstraints(raw []string) (*semver.Constraints, error) {

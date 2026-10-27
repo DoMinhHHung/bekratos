@@ -20,7 +20,7 @@ type Release struct {
 	RuntimeCompat      string
 	APIContractVersion string
 	Metadata           []byte
-	PublishedAt        time.Time
+	PublishedAt        *time.Time
 	Dependencies       []Dependency
 	Conflicts          []string
 }
