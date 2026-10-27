@@ -30,7 +30,7 @@ func NewService(repo *Repository, provider Provider, log *slog.Logger) *Service 
 func (s *Service) Create(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, in CreateInput) (CreateResult, error) {
 	return s.repo.Create(ctx, MutationAuth{
 		OrgID: orgID, ProjectID: projectID, EnvID: envID, ActorID: principal.UserID,
-	}, in, requestid.FromContext(ctx))
+	}, in, requestid.FromContext(ctx), s.provider.Name())
 }
 
 func (s *Service) List(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) ([]Deployment, error) {
