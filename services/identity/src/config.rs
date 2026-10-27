@@ -165,7 +165,10 @@ impl Config {
         let mail_provider = env::var("MAIL_PROVIDER")
             .unwrap_or_else(|_| "none".to_string())
             .to_ascii_lowercase();
-        if !matches!(mail_provider.as_str(), "console" | "none" | "resend" | "smtp") {
+        if !matches!(
+            mail_provider.as_str(),
+            "console" | "none" | "resend" | "smtp"
+        ) {
             return Err(AppError::config(
                 "MAIL_PROVIDER must be console, none, resend, or smtp",
             ));
@@ -225,7 +228,9 @@ impl Config {
                 || smtp_app_password.contains('\r')
                 || smtp_app_password.contains('\n')
             {
-                return Err(AppError::config("SMTP credentials contain invalid characters"));
+                return Err(AppError::config(
+                    "SMTP credentials contain invalid characters",
+                ));
             }
         }
         if app_env == "production"
@@ -237,7 +242,9 @@ impl Config {
             ));
         }
         if app_env == "production" && !matches!(mail_provider.as_str(), "resend" | "smtp") {
-            return Err(AppError::config("production requires MAIL_PROVIDER=resend or smtp"));
+            return Err(AppError::config(
+                "production requires MAIL_PROVIDER=resend or smtp",
+            ));
         }
         if app_env == "production" && !app_public_base_url.starts_with("https://") {
             return Err(AppError::config(
@@ -350,7 +357,9 @@ fn valid_mailbox(value: &str) -> bool {
         && !domain.is_empty()
         && domain.contains('.')
         && parts.next().is_none()
-        && !value.bytes().any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+        && !value
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
 }
 
 fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
