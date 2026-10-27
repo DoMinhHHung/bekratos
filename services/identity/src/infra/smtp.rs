@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
