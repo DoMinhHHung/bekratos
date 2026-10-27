@@ -4,7 +4,7 @@ Identity Service là microservice Rust quản lý tài khoản nền tảng Bekr
 
 > **Phạm vi repo hiện tại:** source tree được kiểm tra trên branch `dev` ngày 2026-10-26 có implementation của `services/identity/`, migration, Docker, CI và integration/security tests. Đây không còn chỉ là repo bootstrap/Phase 0. Tuy nhiên, việc các route tồn tại và tests có trong repo không chứng minh rằng tất cả đã chạy thành công hoặc service đã production-ready. Kiểm tra trạng thái CI thực tế trước khi release.
 
-Control Plane là service tiếp theo trong roadmap; tại thời điểm kiểm tra, `services/control-plane/` chưa có trong repository tree. Control Plane sẽ quản lý organizations/projects/modules/configuration/API-key lifecycle; Identity vẫn là nguồn sự thật cho tài khoản và session của người đăng nhập Dashboard.
+Control Plane hiện có source Go và quản lý organizations/projects/modules/configuration/API-key lifecycle cùng deployment intent. Identity vẫn là nguồn sự thật cho tài khoản/session của người đăng nhập Dashboard. Backend Runtime/server thực thi workload chưa có implementation trong repository; HTTP contract của Control Plane không tự tạo hạ tầng.
 
 ## Phạm vi Identity
 
@@ -64,7 +64,7 @@ Mã nguồn chính nằm trong `services/identity/src/`, migration trong `servic
 
 ## Lưu ý về email trong source hiện tại
 
-Cấu hình mail hiện được thể hiện dưới dạng `MAIL_PROVIDER=console|none`. `ConsoleMailer` chỉ ghi metadata email vào log và trả thành công; nó **không gửi email ra ngoài**. `NoopMailer` trả lỗi unavailable. Vì vậy, trước khi dùng luồng xác minh/reset/restore cho người dùng thật, cần tích hợp một mail provider thực, có retry/backoff, timeout, quan sát lỗi và chính sách bảo vệ dữ liệu. Không coi console mailer là triển khai production.
+Identity có adapter gửi email qua Resend (`MAIL_PROVIDER=resend`) bằng HTTPS, timeout hữu hạn, response limit và không log recipient, nội dung magic link hay API key. `MAIL_PROVIDER=console` chỉ mô phỏng gửi và `none` trả lỗi; cả hai bị từ chối khi `APP_ENV=production`. Cấu hình production cần `APP_ENV=production`, `MAIL_PROVIDER=resend`, `MAIL_API_KEY`, sender đã xác minh ở Resend, `MAIL_API_BASE_URL=https://api.resend.com` và `APP_PUBLIC_BASE_URL` HTTPS. Worker vẫn dùng retry/backoff; cần test gửi tới domain đã xác minh trong staging trước release. Không đưa API key thật vào repo.
 
 ## Tích hợp Control Plane — hợp đồng cần chốt
 
@@ -77,7 +77,7 @@ Trong source Identity được kiểm tra ngày 2026-10-26:
 - Chưa thấy route chuyên dụng cho service khác kiểm tra trạng thái session còn hiệu lực.
 - Không nên giả định JWT hiện chứa verified primary email.
 
-Trước khi mở Control Plane cho thao tác quản trị nhạy cảm, cần thiết kế một hợp đồng service-to-service được xác thực để kiểm tra active session và lấy verified-primary-email, hoặc ghi nhận rõ chính sách yếu hơn với thời gian thu hồi tối đa. Không tin `X-User-ID`, email hoặc role do caller tự truyền.
+Để bật contract, đặt cùng secret random tối thiểu 32 ký tự vào `IDENTITY_SERVICE_API_TOKEN` ở Identity và Control Plane. Control Plane kiểm tra cả JWT/JWKS lẫn introspection; 503 từ Identity làm request quản trị fail-closed. Không tin `X-User-ID`, email hoặc role do caller tự truyền. Endpoint hiện dùng shared-secret header; production nên giới hạn network/mTLS và quản lý secret bằng secret manager. Introspection kiểm tra session tức thời trong DB nên không phụ thuộc deny-list JWT ở Control Plane.
 
 ## Chạy local
 
@@ -96,7 +96,7 @@ docker compose up --build
 
 Compose file nằm tại `services/identity/docker-compose.yml`. Service mặc định lắng nghe port `8080` trong container; đọc `.env.example`, `src/config.rs` và `docs/operations.md` để xác nhận cấu hình mà phiên bản source hiện tại yêu cầu.
 
-**Email:** local `MAIL_PROVIDER=console` không gửi email. Đừng coi tài khoản đăng ký là có thể nhận magic link cho đến khi mail provider thật hoặc một quy trình test token an toàn được cấu hình.
+**Email:** local `MAIL_PROVIDER=console` không gửi email. Để thử gửi thật, dùng API key Resend của môi trường dev và sender/domain đã xác minh; không dùng API key production cho local/test.
 
 ## Kiểm tra chất lượng
 
