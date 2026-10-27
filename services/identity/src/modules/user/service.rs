@@ -3,7 +3,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::session::repo::{RefreshTokenRepo, SessionRepo};
 use crate::modules::user::dto::{
-    ProfileResponse, SessionItem, SessionListResponse, SessionValidationResponse, UpdateProfileRequest,
+    ProfileResponse, SessionItem, SessionListResponse, SessionValidationResponse,
+    UpdateProfileRequest,
 };
 use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
