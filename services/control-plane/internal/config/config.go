@@ -25,6 +25,12 @@ type Config struct {
 	ReadinessTimeout   time.Duration
 	MigrateOnStartup   bool
 	IdentityJWKSURL    string
+	IdentityIntrospectionURL string
+	IdentityServiceToken string
+	IdentityHTTPTimeout time.Duration
+	RuntimeAPIURL string
+	RuntimeAPIToken string
+	RuntimeHTTPTimeout time.Duration
 	JWTIssuer          string
 	JWTAudience        string
 	JWKSCacheTTL       time.Duration
@@ -51,6 +57,8 @@ func Load() (*Config, error) {
 		MigrateOnStartup:   false,
 		JWKSCacheTTL:       60 * time.Second,
 		JWKSHTTPTimeout:    3 * time.Second,
+		IdentityHTTPTimeout: 2 * time.Second,
+		RuntimeHTTPTimeout: 25 * time.Second,
 		JWTLeeway:          30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
 	}
@@ -77,6 +85,36 @@ func Load() (*Config, error) {
 	}
 	if err := validateJWKSURL(cfg.IdentityJWKSURL); err != nil {
 		return nil, err
+	}
+
+	cfg.IdentityIntrospectionURL = strings.TrimSpace(os.Getenv("IDENTITY_INTROSPECTION_URL"))
+	if cfg.IdentityIntrospectionURL == "" {
+		return nil, fmt.Errorf("IDENTITY_INTROSPECTION_URL is required")
+	}
+	if err := validateServiceURL(cfg.IdentityIntrospectionURL, "IDENTITY_INTROSPECTION_URL"); err != nil {
+		return nil, err
+	}
+	cfg.IdentityServiceToken = strings.TrimSpace(os.Getenv("IDENTITY_SERVICE_API_TOKEN"))
+	if len(cfg.IdentityServiceToken) < 32 || strings.Contains(strings.ToLower(cfg.IdentityServiceToken), "change-me") ||
+		strings.Contains(strings.ToLower(cfg.IdentityServiceToken), "replace-with") ||
+		strings.Contains(strings.ToLower(cfg.IdentityServiceToken), "example") {
+		return nil, fmt.Errorf("IDENTITY_SERVICE_API_TOKEN must be a configured non-placeholder secret of at least 32 characters")
+	}
+
+	cfg.RuntimeAPIURL = strings.TrimSpace(os.Getenv("RUNTIME_API_URL"))
+	cfg.RuntimeAPIToken = strings.TrimSpace(os.Getenv("RUNTIME_API_TOKEN"))
+	if (cfg.RuntimeAPIURL == "") != (cfg.RuntimeAPIToken == "") {
+		return nil, fmt.Errorf("RUNTIME_API_URL and RUNTIME_API_TOKEN must be configured together")
+	}
+	if cfg.RuntimeAPIURL != "" {
+		if err := validateServiceURL(cfg.RuntimeAPIURL, "RUNTIME_API_URL"); err != nil {
+			return nil, err
+		}
+		if len(cfg.RuntimeAPIToken) < 32 || strings.Contains(strings.ToLower(cfg.RuntimeAPIToken), "change-me") ||
+			strings.Contains(strings.ToLower(cfg.RuntimeAPIToken), "replace-with") ||
+			strings.Contains(strings.ToLower(cfg.RuntimeAPIToken), "example") {
+			return nil, fmt.Errorf("RUNTIME_API_TOKEN must be a configured non-placeholder secret of at least 32 characters")
+		}
 	}
 
 	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
@@ -116,6 +154,12 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.JWKSHTTPTimeout, err = parseDurationEnv("JWKS_HTTP_TIMEOUT", cfg.JWKSHTTPTimeout); err != nil {
+		return nil, err
+	}
+	if cfg.IdentityHTTPTimeout, err = parseDurationEnv("IDENTITY_HTTP_TIMEOUT", cfg.IdentityHTTPTimeout); err != nil {
+		return nil, err
+	}
+	if cfg.RuntimeHTTPTimeout, err = parseDurationEnv("RUNTIME_HTTP_TIMEOUT", cfg.RuntimeHTTPTimeout); err != nil {
 		return nil, err
 	}
 	if cfg.JWTLeeway, err = parseDurationEnv("JWT_LEEWAY", cfg.JWTLeeway); err != nil {
@@ -197,6 +241,26 @@ func validateJWKSURL(raw string) error {
 		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
 	default:
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	}
+}
+
+func validateServiceURL(raw, name string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL without userinfo, query, or fragment", name)
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if loopback {
+			return nil
+		}
+		return fmt.Errorf("%s must use https except for loopback hosts", name)
+	default:
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL", name)
 	}
 }
 
