@@ -472,8 +472,8 @@ SET status = 'ready',
     finished_at = $7,
     updated_at = $7
 WHERE id = $1
-  AND fencing_token = $6
-  AND lease_owner = $7
+  AND fencing_token = $8
+  AND lease_owner = $9
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
