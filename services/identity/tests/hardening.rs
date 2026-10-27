@@ -561,6 +561,60 @@ async fn redis_rate_limit_enforces_limit_and_fails_closed() {
 }
 
 #[tokio::test]
+async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
+    let Some(pool) = common::test_pool().await else {
+        eprintln!("DATABASE_URL_TEST not set; skipping email terminal-state test");
+        return;
+    };
+    let user_id = create_user(&pool, "pending").await;
+    let repo = TokenRepo::new(&pool);
+    let permanent_id = Uuid::now_v7();
+    repo.insert(
+        permanent_id,
+        user_id,
+        "email_verify",
+        "terminal-email@example.test",
+        Utc::now() + ChronoDuration::hours(1),
+    )
+    .await
+    .expect("insert permanent-failure token");
+    let claimed = repo.claim_due_for_delivery(1, 60).await.expect("claim token");
+    assert_eq!(claimed.len(), 1);
+    repo.mark_delivery_permanent_failure(permanent_id, "max_attempts")
+        .await
+        .expect("mark token permanently failed");
+    let reclaimed = repo.claim_due_for_delivery(1, 60).await.expect("claim after terminal failure");
+    assert!(reclaimed.is_empty());
+
+    let expired_id = Uuid::now_v7();
+    repo.insert(
+        expired_id,
+        user_id,
+        "email_verify",
+        "expired-email@example.test",
+        Utc::now() - ChronoDuration::minutes(1),
+    )
+    .await
+    .expect("insert expired token");
+    let expired_claim = repo.claim_due_for_delivery(10, 60).await.expect("claim expired token");
+    assert!(expired_claim.is_empty());
+    delete_user(&pool, user_id).await;
+}
+
+#[tokio::test]
+async fn email_queue_state_updates_fail_when_token_row_is_missing() {
+    let Some(pool) = common::test_pool().await else {
+        eprintln!("DATABASE_URL_TEST not set; skipping email queue persistence test");
+        return;
+    };
+    let repo = TokenRepo::new(&pool);
+    let missing_id = Uuid::now_v7();
+    assert!(repo.mark_sent(missing_id).await.is_err());
+    assert!(repo.mark_delivery_failure(missing_id, "send_failed", 30).await.is_err());
+    assert!(repo.mark_delivery_permanent_failure(missing_id, "max_attempts").await.is_err());
+}
+
+#[tokio::test]
 async fn sent_tokens_are_not_reclaimed_after_mark_sent() {
     let Some(pool) = common::test_pool().await else {
         eprintln!("DATABASE_URL_TEST not set; skipping mark_sent claim test");
