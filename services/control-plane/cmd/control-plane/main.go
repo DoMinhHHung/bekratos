@@ -47,7 +47,7 @@ func main() {
 
 	jwks := auth.NewJWKSProvider(cfg.IdentityJWKSURL, cfg.JWKSCacheTTL, cfg.JWKSHTTPTimeout)
 	validator := auth.NewValidator(jwks, cfg.JWTIssuer, cfg.JWTAudience, cfg.JWTLeeway, cfg.MaxRevocationDelay)
-	identityProfile := auth.NewIdentityProfileVerifier(cfg.IdentityProfileURL, cfg.JWKSHTTPTimeout)
+	identityProfile := auth.NewIdentityProfileVerifier(cfg.IdentityProfileURL, cfg.IdentityServiceToken, cfg.JWKSHTTPTimeout)
 	authMW := auth.NewMiddlewareWithIdentity(validator, log, identityProfile)
 
 	srv := server.New(cfg, pool, log, authMW)
