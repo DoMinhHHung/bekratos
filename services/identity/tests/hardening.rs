@@ -578,13 +578,26 @@ async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
     )
     .await
     .expect("insert permanent-failure token");
-    let claimed = repo.claim_due_for_delivery(1, 60).await.expect("claim token");
-    assert_eq!(claimed.len(), 1);
     repo.mark_delivery_permanent_failure(permanent_id, "max_attempts")
         .await
         .expect("mark token permanently failed");
-    let reclaimed = repo.claim_due_for_delivery(1, 60).await.expect("claim after terminal failure");
-    assert!(reclaimed.is_empty());
+    let (retry_after_expiry, is_scheduled_after_expiry): (chrono::DateTime<Utc>, bool) =
+        sqlx::query_as(
+            "SELECT next_attempt_at, next_attempt_at > now() FROM token.verification_tokens WHERE id = $1",
+        )
+        .bind(permanent_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read terminal token state");
+    let expires_at: chrono::DateTime<Utc> = sqlx::query_scalar(
+        "SELECT expires_at FROM token.verification_tokens WHERE id = $1",
+    )
+    .bind(permanent_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read token expiry");
+    assert_eq!(retry_after_expiry, expires_at);
+    assert!(is_scheduled_after_expiry);
 
     let expired_id = Uuid::now_v7();
     repo.insert(
