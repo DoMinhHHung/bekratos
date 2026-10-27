@@ -12,12 +12,12 @@ import (
 )
 
 func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
-	deploymentID:  = uuid.New()
-	environmentID: = uuid.New()
-	versionID:     = uuid.New()
-	requestID:     = "deploy-idempotency-123"
+	deploymentID := uuid.New()
+	environmentID := uuid.New()
+	versionID := uuid.New()
+	requestID := "deploy-idempotency-123"
 
-	server: = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/deployments" {
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -47,7 +47,7 @@ func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider: = NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
 		DeploymentID:           deploymentID,
 		EnvironmentID:          environmentID,
@@ -64,12 +64,12 @@ func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
 }
 
 func TestHTTPProviderRejectsMismatchedVersionEvidence(t *testing.T) {
-	deploymentID:  = uuid.New()
-	environmentID: = uuid.New()
-	versionID:     = uuid.New()
-	requestID:     = "deploy-idempotency-456"
+	deploymentID := uuid.New()
+	environmentID := uuid.New()
+	versionID := uuid.New()
+	requestID := "deploy-idempotency-456"
 
-	server: = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
 			Outcome:              OutcomeSuccess,
 			RequestID:            requestID,
@@ -83,7 +83,7 @@ func TestHTTPProviderRejectsMismatchedVersionEvidence(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider: = NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
 		DeploymentID:           deploymentID,
 		EnvironmentID:          environmentID,
@@ -100,17 +100,17 @@ func TestHTTPProviderRejectsMismatchedVersionEvidence(t *testing.T) {
 }
 
 func TestHTTPProviderDoesNotFollowRedirects(t *testing.T) {
-	redirected: = false
-	target:     = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	redirected := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		redirected = true
 	}))
 	defer target.Close()
-	source: = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	defer source.Close()
 
-	provider: = NewHTTPProvider(source.URL, "runtime-secret", time.Second)
+	provider := NewHTTPProvider(source.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
 		DeploymentID:           uuid.New(),
 		EnvironmentID:          uuid.New(),
