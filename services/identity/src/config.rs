@@ -17,6 +17,7 @@ pub struct Config {
     pub readiness_require_redis: bool,
     pub magic_link_hmac_keys: String,
     pub magic_link_active_kid: String,
+    pub app_env: String,
     pub app_public_base_url: String,
     pub mail_provider: String,
     pub mail_from: String,
@@ -53,6 +54,7 @@ impl std::fmt::Debug for Config {
             .field("readiness_require_redis", &self.readiness_require_redis)
             .field("magic_link_hmac_keys", &"[REDACTED]")
             .field("magic_link_active_kid", &self.magic_link_active_kid)
+            .field("app_env", &self.app_env)
             .field("app_public_base_url", &self.app_public_base_url)
             .field("mail_provider", &self.mail_provider)
             .field("mail_from", &self.mail_from)
@@ -140,6 +142,13 @@ impl Config {
         }
         let magic_link_active_kid = env::var("MAGIC_LINK_ACTIVE_KID")
             .map_err(|_| AppError::config("MAGIC_LINK_ACTIVE_KID is required"))?;
+        let app_env = env::var("APP_ENV")
+            .unwrap_or_else(|_| "development".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(app_env.as_str(), "development" | "test" | "production") {
+            return Err(AppError::config("APP_ENV must be development, test, or production"));
+        }
         let app_public_base_url = env::var("APP_PUBLIC_BASE_URL")
             .map_err(|_| AppError::config("APP_PUBLIC_BASE_URL is required"))?;
         if app_public_base_url.is_empty() {
@@ -163,14 +172,30 @@ impl Config {
         if mail_timeout_secs == 0 || mail_timeout_secs > 120 {
             return Err(AppError::config("MAIL_TIMEOUT_SECS must be between 1 and 120"));
         }
+        if app_env == "production" && mail_provider != "resend" {
+            return Err(AppError::config(
+                "production requires MAIL_PROVIDER=resend; console and none are not allowed",
+            ));
+        }
+        if app_env == "production" {
+            validate_http_url(&app_public_base_url, "APP_PUBLIC_BASE_URL", false)?;
+        }
         if mail_provider == "resend" {
-            if mail_api_key.trim().len() < 16 || mail_api_key.contains("change-me") {
+            if mail_api_key.trim().len() < 16
+                || mail_api_key.to_ascii_lowercase().contains("change-me")
+                || mail_api_key.to_ascii_lowercase().contains("replace-with")
+                || mail_api_key.to_ascii_lowercase().contains("example")
+            {
                 return Err(AppError::config("MAIL_API_KEY is required for MAIL_PROVIDER=resend"));
             }
             if !mail_from.contains('@') || mail_from.chars().any(char::is_whitespace) {
                 return Err(AppError::config("MAIL_FROM must be a valid email address for Resend"));
             }
-            validate_http_url(&mail_api_base_url, "MAIL_API_BASE_URL", true)?;
+            validate_http_url(
+                &mail_api_base_url,
+                "MAIL_API_BASE_URL",
+                app_env != "production",
+            )?;
         }
         let identity_service_api_token = env::var("IDENTITY_SERVICE_API_TOKEN")
             .ok()
@@ -252,6 +277,7 @@ impl Config {
             readiness_require_redis,
             magic_link_hmac_keys,
             magic_link_active_kid,
+            app_env,
             app_public_base_url,
             mail_provider,
             mail_from,
