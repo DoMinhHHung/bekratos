@@ -58,6 +58,7 @@ impl Modify for BearerAuth {
         crate::modules::auth::routes::change_password,
         crate::modules::auth::routes::request_restore,
         crate::modules::auth::routes::confirm_restore,
+        crate::modules::user::routes::validate_internal_session,
         crate::modules::user::routes::get_profile,
         crate::modules::user::routes::update_profile,
         crate::modules::user::routes::list_sessions,
@@ -88,6 +89,7 @@ impl Modify for BearerAuth {
         crate::modules::auth::dto::RestoreConfirmRequest,
         crate::modules::auth::dto::RestoreResponse,
         crate::modules::user::dto::ProfileResponse,
+        crate::modules::user::dto::SessionValidationResponse,
         crate::modules::user::dto::UpdateProfileRequest,
         crate::modules::user::dto::SessionItem,
         crate::modules::user::dto::SessionListResponse,
@@ -138,6 +140,7 @@ mod tests {
             "/v1/auth/change-password",
             "/v1/auth/request-restore",
             "/v1/auth/restore",
+            "/v1/internal/session",
             "/v1/me",
             "/v1/me/sessions",
             "/v1/me/sessions/{id}",
@@ -146,7 +149,7 @@ mod tests {
         ] {
             assert!(paths.contains_key(path), "OpenAPI route missing: {path}");
         }
-        assert_eq!(paths.len(), 18);
+        assert_eq!(paths.len(), 19);
 
         let security_schemes = &document["components"]["securitySchemes"];
         assert_eq!(security_schemes["bearer_auth"]["scheme"], "bearer");
