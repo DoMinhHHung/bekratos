@@ -862,7 +862,7 @@ INSERT INTO environment_configuration_versions (
 		t.Fatal(err)
 	}
 	_, err = svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
-		IdempotencyKey:          "queued-config-" + uuid.NewString(),
+		IdempotencyKey:         "queued-config-" + uuid.NewString(),
 		ConfigurationVersionID: &candidateID,
 	})
 	if !errors.Is(err, ErrVersionNotDeployable) {
