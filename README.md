@@ -2,7 +2,7 @@
 
 Bekratos là nền tảng Backend-as-a-Service hướng tới no-code/low-code. Người dùng có thể tạo backend bằng cách chọn modules, tùy chỉnh entities, fields và relationships qua Dashboard; developer có thể tích hợp API trực tiếp và tùy chỉnh ứng dụng bằng code.
 
-> Trạng thái tại 26/10/2026: Identity Service có source Rust, migration PostgreSQL, Docker, CI và integration/security tests. Control Plane và Backend Runtime/Data Plane chưa được triển khai. Có source/tests không đồng nghĩa mọi test đã pass hoặc service production-ready; phải kiểm tra CI và xác minh trên môi trường disposable trước release.
+> Trạng thái tại 27/10/2026: Identity Service có source Rust; Control Plane có source Go với module/org/project/config-version/API-key/deployment-intent. Branch `feat/identity-mail-runtime-integration` đang nối mail provider thật, Identity introspection và HTTP adapters tới Runtime contract. Backend Runtime server/infrastructure provider chưa có implementation trong repo; không coi deployment là end-to-end cho tới khi Runtime endpoint và staging target thật được tích hợp, test.
 
 ## Kiến trúc dự kiến
 
@@ -20,13 +20,14 @@ Platform users và project end-users là hai identity domains riêng. Platform J
 - docs/control-plane/implementation-plan.md: roadmap từng phase.
 - docs/grok/CONTROL_PLANE_PROMPTS.md: prompt implementer/reviewer dùng lâu dài.
 - docs/grok/CONTROL_PLANE_PHASE_1.md: prompt triển khai nền Go đầu tiên.
-- services/control-plane/: sẽ được tạo trong Phase 1, chưa phải source hiện có.
+- services/control-plane/: Go API và PostgreSQL-backed management plane.
+- docs/control-plane/deployment-runtime-contract.md: contract versioned cho apply/deploy từ Control Plane xuống Runtime.
 
 ## Identity Service
 
 Xem [Identity Service README](services/identity/README.md) để biết route, cấu hình, mô hình dữ liệu và hạn chế tích hợp. Identity dùng PostgreSQL làm nguồn sự thật cho identity/security state; Redis hiện hỗ trợ rate limiting và chức năng phụ trợ. Access token dùng JWT ES256/JWKS; endpoint JWKS hiện là GET /v1/jwks.
 
-Lưu ý trước khi dùng với người dùng thật: cấu hình ConsoleMailer hiện không gửi email ra ngoài. Cần tích hợp và kiểm thử mail provider thực, đồng thời xác minh CI, migrations, secret handling, failure modes và deploy controls trước production.
+Lưu ý trước khi dùng với người dùng thật: Identity có adapter Resend nhưng phải cấu hình `MAIL_PROVIDER=resend`, key và sender/domain đã xác minh trong môi trường deploy. `APP_ENV=production` từ chối `console`/`none`. Control Plane xác thực active session và verified email qua internal Identity contract khi được cấu hình.
 
 ## Quyết định Control Plane MVP
 
