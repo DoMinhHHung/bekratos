@@ -11,6 +11,7 @@ func setBaseEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://bekratos:bekratos@localhost:5432/bekratos")
 	t.Setenv("IDENTITY_JWKS_URL", "http://localhost:8080/v1/jwks")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "local-dev-only-not-for-production-identity-service-token")
 	t.Setenv("JWT_ISSUER", "https://identity.bekratos.local")
 	t.Setenv("JWT_AUDIENCE", "bekratos-api")
 	t.Setenv("ENV_FILE", "")
