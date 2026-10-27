@@ -2,6 +2,8 @@ package deployment
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -24,12 +26,15 @@ func (p *HTTPProvider) Name() ProviderName {
 }
 
 type runtimeProvisionRequest struct {
-	ContractVersion        string    `json:"contract_version"`
-	DeploymentID           uuid.UUID `json:"deployment_id"`
-	EnvironmentID          uuid.UUID `json:"environment_id"`
-	ConfigurationVersionID uuid.UUID `json:"configuration_version_id"`
-	ProviderRequestID      string    `json:"provider_request_id"`
-	TargetMode             TargetMode `json:"target_mode"`
+	ContractVersion        string          `json:"contract_version"`
+	DeploymentID            uuid.UUID       `json:"deployment_id"`
+	EnvironmentID           uuid.UUID       `json:"environment_id"`
+	ConfigurationVersionID  uuid.UUID       `json:"configuration_version_id"`
+	ManifestFormatVersion   int             `json:"manifest_format_version"`
+	ManifestSHA256          string          `json:"manifest_sha256"`
+	Manifest                json.RawMessage `json:"manifest"`
+	ProviderRequestID       string          `json:"provider_request_id"`
+	TargetMode              TargetMode      `json:"target_mode"`
 }
 
 type runtimeProvisionResponse struct {
@@ -48,13 +53,33 @@ type runtimeProvisionResponse struct {
 }
 
 func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
+	if req.ManifestFormatVersion <= 0 || !json.Valid([]byte(req.ManifestCanonical)) {
+		return ProvisionResult{
+			Outcome:   OutcomeFailure,
+			Code:      "invalid_configuration",
+			Message:   "immutable configuration manifest is invalid",
+			RequestID: req.ProviderRequestID,
+		}, nil
+	}
+	sum := sha256.Sum256([]byte(req.ManifestCanonical))
+	if hex.EncodeToString(sum[:]) != req.ManifestSHA256 {
+		return ProvisionResult{
+			Outcome:   OutcomeFailure,
+			Code:      "invalid_configuration",
+			Message:   "immutable configuration manifest hash does not match",
+			RequestID: req.ProviderRequestID,
+		}, nil
+	}
 	body := runtimeProvisionRequest{
-		ContractVersion       : undefined,
-		DeploymentID          : undefined,
-		EnvironmentID         : undefined,
-		ConfigurationVersionID: undefined,
-		ProviderRequestID     : undefined,
-		TargetMode            : undefined,
+		ContractVersion:        "v1",
+		DeploymentID:           req.DeploymentID,
+		EnvironmentID:          req.EnvironmentID,
+		ConfigurationVersionID: req.ConfigurationVersionID,
+		ManifestFormatVersion:  req.ManifestFormatVersion,
+		ManifestSHA256:         req.ManifestSHA256,
+		Manifest:               json.RawMessage(req.ManifestCanonical),
+		ProviderRequestID:      req.ProviderRequestID,
+		TargetMode:             req.TargetMode,
 	}
 	status, responseBody, err := p.client.Post(ctx, "/v1/internal/deployments", req.ProviderRequestID, body)
 	if err != nil {
@@ -63,19 +88,19 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	switch {
 	case status == http.StatusTooManyRequests:
 		return ProvisionResult{
-			Outcome  : undefined,
-			Code     : undefined,
-			Message  : undefined,
-			RequestID: undefined,
+			Outcome:   OutcomeRetryable,
+			Code:      "runtime_busy",
+			Message:   "runtime rejected the request before accepting an operation",
+			RequestID: req.ProviderRequestID,
 		}, nil
 	case status == http.StatusRequestTimeout || status >= 500 || status < 200 || status >= 300 && status < 400:
 		return ambiguousProviderResult(req.ProviderRequestID), nil
 	case status >= 400:
 		return ProvisionResult{
-			Outcome  : undefined,
-			Code     : undefined,
-			Message  : undefined,
-			RequestID: undefined,
+			Outcome:   OutcomeFailure,
+			Code:      "runtime_rejected",
+			Message:   "runtime rejected deployment request",
+			RequestID: req.ProviderRequestID,
 		}, nil
 	}
 
@@ -98,28 +123,28 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	}
 
 	return ProvisionResult{
-		Outcome             : undefined,
-		Code                : undefined,
-		Message             : undefined,
-		URL                 : undefined,
-		Host                : undefined,
-		Region              : undefined,
-		RequestID           : undefined,
-		DeploymentID        : undefined,
-		EnvironmentID       : undefined,
-		VersionID           : undefined,
-		ReadinessProbePassed: undefined,
-		ReadinessProbeID    : undefined,
-		ReadinessObservedAt : undefined,
+		Outcome:              outcome,
+		Code:                 safeRuntimeCode(result.Code, outcome),
+		Message:              safeRuntimeMessage(outcome),
+		URL:                  result.URL,
+		Host:                 result.Host,
+		Region:                result.Region,
+		RequestID:            result.ProviderRequestID,
+		DeploymentID:         result.DeploymentID,
+		EnvironmentID:        result.EnvironmentID,
+		VersionID:            result.VersionID,
+		ReadinessProbePassed: result.ReadinessProbePassed,
+		ReadinessProbeID:     result.ReadinessProbeID,
+		ReadinessObservedAt:  result.ReadinessObservedAt,
 	}, nil
 }
 
 func ambiguousProviderResult(requestID string) ProvisionResult {
 	return ProvisionResult{
-		Outcome  : undefined,
-		Code     : undefined,
-		Message  : undefined,
-		RequestID: undefined,
+		Outcome:   OutcomeAmbiguous,
+		Code:      "runtime_operation_ambiguous",
+		Message:   "runtime operation outcome is unknown; reconciliation is required",
+		RequestID: requestID,
 	}
 }
 
