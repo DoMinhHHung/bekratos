@@ -52,9 +52,9 @@ func NewHTTPProvider(baseURL, token string, timeout time.Duration) *HTTPProvider
 	}
 	return &HTTPProvider{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
-		client:  &http.Client{
-			Timeout:       timeout,
+		token: token,
+		client: &http.Client{
+			Timeout: timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -72,11 +72,11 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	}
 
 	payload := runtimeProvisionRequest{
-		DeploymentID:           req.DeploymentID,
-		EnvironmentID:          req.EnvironmentID,
+		DeploymentID: req.DeploymentID,
+		EnvironmentID: req.EnvironmentID,
 		ConfigurationVersionID: req.ConfigurationVersionID,
-		IdempotencyKey:         req.ProviderRequestID,
-		TargetMode:             req.TargetMode,
+		IdempotencyKey: req.ProviderRequestID,
+		TargetMode: req.TargetMode,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -130,25 +130,25 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 			result.ReadinessObservedAt.After(time.Now().Add(30*time.Second)) ||
 			time.Since(result.ReadinessObservedAt) > 2*time.Minute) {
 		return ProvisionResult{
-			Outcome:   OutcomeAmbiguous,
-			Code:      "invalid_readiness_evidence",
+			Outcome: OutcomeAmbiguous,
+			Code: "invalid_readiness_evidence",
 			RequestID: req.ProviderRequestID,
 		}, nil
 	}
 
 	return ProvisionResult{
-		Outcome:              result.Outcome,
-		Code:                 result.Code,
-		Message:              result.Message,
-		URL:                  result.URL,
-		Host:                 result.Host,
-		Region:               result.Region,
-		RequestID:            result.RequestID,
-		DeploymentID:         result.DeploymentID,
-		EnvironmentID:        result.EnvironmentID,
-		VersionID:            result.VersionID,
+		Outcome: result.Outcome,
+		Code: result.Code,
+		Message: result.Message,
+		URL: result.URL,
+		Host: result.Host,
+		Region: result.Region,
+		RequestID: result.RequestID,
+		DeploymentID: result.DeploymentID,
+		EnvironmentID: result.EnvironmentID,
+		VersionID: result.VersionID,
 		ReadinessProbePassed: result.ReadinessProbePassed,
-		ReadinessProbeID:     result.ReadinessProbeID,
-		ReadinessObservedAt:  result.ReadinessObservedAt,
+		ReadinessProbeID: result.ReadinessProbeID,
+		ReadinessObservedAt: result.ReadinessObservedAt,
 	}, nil
 }
