@@ -75,7 +75,13 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 	}
 	switch res.Outcome {
 	case OutcomeSuccess:
-		return s.repo.MarkReady(ctx, d, workerID, res)
+		if err := s.repo.MarkReady(ctx, d, workerID, res); err != nil {
+			if errors.Is(err, ErrStaleWorker) {
+				return err
+			}
+			return s.repo.MarkFailed(ctx, d, workerID, "invalid_provider_evidence", "provider evidence rejected", true)
+		}
+		return nil
 	case OutcomeUnavailable:
 		return s.repo.MarkFailed(ctx, d, workerID, res.Code, res.Message, true)
 	case OutcomeFailure:

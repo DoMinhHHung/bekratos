@@ -83,8 +83,9 @@ UPDATE project_environments SET active_configuration_version_id = $2 WHERE id = 
 func TestCreateUsesActiveConfigurationAndIdempotency(t *testing.T) {
 	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	principal := auth.Principal{UserID: userID}
+	key := "idem-1-" + uuid.NewString()
 	first, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "idem-1",
+		IdempotencyKey: key,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +97,7 @@ func TestCreateUsesActiveConfigurationAndIdempotency(t *testing.T) {
 		t.Fatalf("status=%s", first.Deployment.Status)
 	}
 	second, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "idem-1",
+		IdempotencyKey: key,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +130,7 @@ INSERT INTO environment_configuration_versions (
 	}
 	_, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		ConfigurationVersionID: &otherVersion,
-		IdempotencyKey:         "cross-version",
+		IdempotencyKey:         "cross-version-" + uuid.NewString(),
 	})
 	if !errors.Is(err, ErrConfigMismatch) {
 		t.Fatalf("error=%v; want config mismatch", err)
@@ -140,17 +141,13 @@ func TestUnavailableProviderNeverReachesReady(t *testing.T) {
 	ctx, _, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	principal := auth.Principal{UserID: userID}
 	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "fail-closed",
+		IdempotencyKey: "fail-closed-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := svc.ProcessOnce(ctx, "test-worker", 30*time.Second, 5)
-	if err != nil {
+	if _, err := svc.ProcessOnce(ctx, "test-worker-unavailable", 30*time.Second, 20); err != nil {
 		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatalf("processed=%d", n)
 	}
 	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
 	if err != nil {
@@ -182,12 +179,12 @@ func TestRecordingProviderReadyRequiresValidatedEvidence(t *testing.T) {
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "ready-ok",
+		IdempotencyKey: "ready-ok-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.ProcessOnce(ctx, "test-worker", 30*time.Second, 5); err != nil {
+	if _, err := svc.ProcessOnce(ctx, "test-worker-ready", 30*time.Second, 20); err != nil {
 		t.Fatal(err)
 	}
 	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
@@ -212,12 +209,12 @@ func TestReadyRejectedOnEnvironmentMismatch(t *testing.T) {
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "mismatch-env",
+		IdempotencyKey: "mismatch-env-" + uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = svc.ProcessOnce(ctx, "test-worker", 30*time.Second, 5)
+	_, _ = svc.ProcessOnce(ctx, "test-worker-mismatch", 30*time.Second, 20)
 	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +244,7 @@ VALUES ($1,$2,$3,'active')`, orgID, uid, tc.role); err != nil {
 			t.Fatal(err)
 		}
 		_, err := svc.Create(ctx, auth.Principal{UserID: uid}, orgID, projectID, envID, CreateInput{
-			IdempotencyKey: "role-" + tc.role,
+			IdempotencyKey: "role-" + tc.role + "-" + uuid.NewString(),
 		})
 		if tc.canDeploy && err != nil {
 			t.Fatalf("role %s deploy: %v", tc.role, err)
@@ -268,6 +265,7 @@ VALUES ($1,$2,$3,'active')`, orgID, uid, tc.role); err != nil {
 func TestConcurrentIdempotentCreate(t *testing.T) {
 	ctx, _, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	principal := auth.Principal{UserID: userID}
+	key := "race-idem-" + uuid.NewString()
 	var wg sync.WaitGroup
 	results := make(chan CreateResult, 8)
 	errs := make(chan error, 8)
@@ -276,7 +274,7 @@ func TestConcurrentIdempotentCreate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			res, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-				IdempotencyKey: "race-idem",
+				IdempotencyKey: key,
 			})
 			if err != nil {
 				errs <- err
@@ -307,24 +305,40 @@ func TestConcurrentIdempotentCreate(t *testing.T) {
 }
 
 func TestStaleWorkerCannotMarkReady(t *testing.T) {
-	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	principal := auth.Principal{UserID: userID}
 	repo := NewRepository(pool)
 	svc := NewService(repo, NewUnavailableProvider(), nil)
-	if _, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "stale-fence",
-	}); err != nil {
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "stale-fence-" + uuid.NewString(),
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := repo.Claim(ctx, "worker-a", 30*time.Second, 1)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("claim: %v len=%d", err, len(claimed))
+
+	var d Deployment
+	found := false
+	for i := 0; i < 10 && !found; i++ {
+		claimed, err := repo.Claim(ctx, "worker-a", 30*time.Second, 20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range claimed {
+			if c.ID == created.Deployment.ID {
+				d = c
+				found = true
+				break
+			}
+		}
 	}
-	d := claimed[0]
+	if !found {
+		t.Fatal("created deployment was not claimed")
+	}
+
 	err = repo.MarkReady(ctx, d, "worker-b", ProvisionResult{
 		Outcome:       OutcomeSuccess,
-		EnvironmentID: envID,
-		VersionID:     versionID,
+		EnvironmentID: d.EnvironmentID,
+		VersionID:     d.ConfigurationVersionID,
 		Host:          "x",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
