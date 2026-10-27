@@ -62,6 +62,18 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("JWKS_CACHE_TTL", "24h")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("long JWKS_CACHE_TTL should remain accepted: %v", err)
+	}
+	if cfg.JWKSCacheTTL != 24*time.Hour {
+		t.Fatalf("JWKSCacheTTL = %v, want 24h", cfg.JWKSCacheTTL)
+	}
+}
+
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")

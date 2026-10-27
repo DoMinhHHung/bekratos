@@ -40,7 +40,7 @@ type jwksDocument struct {
 type JWKSProvider struct {
 	url            string
 	httpClient     *http.Client
-	ttl            time.Duration
+	effectiveTTL   time.Duration
 	staleTTL       time.Duration
 	refreshCD      time.Duration
 	mu             sync.RWMutex
@@ -48,6 +48,7 @@ type JWKSProvider struct {
 	fetchedAt      time.Time
 	lastRefreshAt  time.Time
 	lastRefreshErr error
+	now            func() time.Time
 	sf             singleflight.Group
 }
 
@@ -58,20 +59,32 @@ func NewJWKSProvider(url string, ttl, timeout time.Duration) *JWKSProvider {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
-	stale := ttl * 3
-	if stale > hardMaxStaleTTL {
-		stale = hardMaxStaleTTL
+	effectiveTTL := ttl
+	if effectiveTTL > hardMaxStaleTTL {
+		effectiveTTL = hardMaxStaleTTL
+	}
+	stale := hardMaxStaleTTL
+	if ttl <= hardMaxStaleTTL/3 {
+		stale = ttl * 3
 	}
 	return &JWKSProvider{
 		url: url,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		ttl:       ttl,
-		staleTTL:  stale,
-		refreshCD: defaultRefreshCD,
-		keys:      make(map[string]*ecdsa.PublicKey),
+		effectiveTTL: effectiveTTL,
+		staleTTL:     stale,
+		refreshCD:    defaultRefreshCD,
+		keys:         make(map[string]*ecdsa.PublicKey),
+		now:          time.Now,
 	}
+}
+
+func (p *JWKSProvider) currentTime() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 func (p *JWKSProvider) Keyfunc(ctx context.Context) jwt.Keyfunc {
@@ -94,8 +107,9 @@ func (p *JWKSProvider) Keyfunc(ctx context.Context) jwt.Keyfunc {
 func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	p.mu.RLock()
 	key, ok := p.keys[kid]
-	fresh := !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < p.ttl
-	staleOK := ok && !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < p.staleTTL
+	age := p.currentTime().Sub(p.fetchedAt)
+	fresh := !p.fetchedAt.IsZero() && age < p.effectiveTTL
+	staleOK := ok && !p.fetchedAt.IsZero() && age < p.staleTTL && age < hardMaxStaleTTL
 	p.mu.RUnlock()
 
 	if ok && fresh {
@@ -104,7 +118,14 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 
 	if err := p.refreshSerialized(ctx); err != nil {
 		if staleOK {
-			return key, nil
+			p.mu.RLock()
+			key, ok = p.keys[kid]
+			age = p.currentTime().Sub(p.fetchedAt)
+			staleOK = ok && !p.fetchedAt.IsZero() && age < p.staleTTL && age < hardMaxStaleTTL
+			p.mu.RUnlock()
+			if staleOK {
+				return key, nil
+			}
 		}
 		return nil, err
 	}
@@ -115,7 +136,8 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 	if !ok {
 		return nil, fmt.Errorf("unknown kid")
 	}
-	if p.fetchedAt.IsZero() || time.Since(p.fetchedAt) >= p.staleTTL {
+	age = p.currentTime().Sub(p.fetchedAt)
+	if p.fetchedAt.IsZero() || age >= p.staleTTL || age >= hardMaxStaleTTL {
 		return nil, fmt.Errorf("jwks stale")
 	}
 	return key, nil
@@ -123,7 +145,7 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 
 func (p *JWKSProvider) refreshSerialized(ctx context.Context) error {
 	p.mu.RLock()
-	cdActive := !p.lastRefreshAt.IsZero() && time.Since(p.lastRefreshAt) < p.refreshCD
+	cdActive := !p.lastRefreshAt.IsZero() && p.currentTime().Sub(p.lastRefreshAt) < p.refreshCD
 	lastErr := p.lastRefreshErr
 	p.mu.RUnlock()
 	if cdActive {
@@ -135,7 +157,7 @@ func (p *JWKSProvider) refreshSerialized(ctx context.Context) error {
 
 	_, err, _ := p.sf.Do("jwks", func() (any, error) {
 		p.mu.RLock()
-		if !p.lastRefreshAt.IsZero() && time.Since(p.lastRefreshAt) < p.refreshCD {
+		if !p.lastRefreshAt.IsZero() && p.currentTime().Sub(p.lastRefreshAt) < p.refreshCD {
 			err := p.lastRefreshErr
 			p.mu.RUnlock()
 			return nil, err
@@ -143,7 +165,7 @@ func (p *JWKSProvider) refreshSerialized(ctx context.Context) error {
 		p.mu.RUnlock()
 		err := p.refresh(ctx)
 		p.mu.Lock()
-		p.lastRefreshAt = time.Now()
+		p.lastRefreshAt = p.currentTime()
 		p.lastRefreshErr = err
 		p.mu.Unlock()
 		return nil, err
@@ -207,7 +229,7 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 
 	p.mu.Lock()
 	p.keys = next
-	p.fetchedAt = time.Now()
+	p.fetchedAt = p.currentTime()
 	p.mu.Unlock()
 	return nil
 }

@@ -24,6 +24,8 @@ Project end-users are customers of apps built on Bekratos. Their accounts and se
 
 The inspected Identity API publishes JWKS at GET /v1/jwks. Its ES256 access-token contract includes sub, sid, iss, aud, iat, nbf and exp; the default access-token TTL is 900 seconds. Control Plane requires those claims, validates nbf with configured clock skew, and treats MAX_REVOCATION_DELAY as the maximum time from iat through which a token can be accepted. Expiration leeway cannot extend acceptance beyond that deadline. There is no confirmed active-session introspection API or verified-primary-email claim. Before production management routes are enabled, define an authenticated service-to-service contract for active session checks and verified email lookup, or document an explicit bounded revocation/email limitation. Never trust X-User-ID or an unverified email supplied by a caller.
 
+`JWKS_CACHE_TTL` accepts configured durations up to 24 hours for compatibility, but the effective fresh-key age is capped at five minutes. Failed refreshes may use a cached key only within the provider's stale-if-error window (at most three times `JWKS_CACHE_TTL`) and strictly before that five-minute hard limit; at or beyond the limit, verification fails closed.
+
 ## 3. Core decisions
 
 - PostgreSQL is the Control Plane source of truth. Do not add Redis in the foundation phase without a demonstrated need.
