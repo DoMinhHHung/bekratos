@@ -53,8 +53,8 @@ func NewHTTPProvider(baseURL, token string, timeout time.Duration) *HTTPProvider
 	return &HTTPProvider{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		client:  &http.Client{
-			Timeout:       timeout,
+		client: &http.Client{
+			Timeout: timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
