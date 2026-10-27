@@ -80,7 +80,7 @@ impl SmtpMailer {
         let mut stream = BufReader::new(tls);
 
         expect_response(&mut stream, &[220]).await?;
-        command(&mut stream, "EHLO bek r at os.invalid".replace(' ', "").as_str(), &[250]).await?;
+        command(&mut stream, "EHLO bekratos.invalid".as_str(), &[250]).await?;
         command(&mut stream, "AUTH LOGIN", &[334]).await?;
         command(&mut stream, STANDARD.encode(self.username.as_bytes()).as_str(), &[334]).await?;
         command(
