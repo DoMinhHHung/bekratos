@@ -1,13 +1,5 @@
 # Identity Service Operations
 
-## Identity email delivery
-
-Set `MAIL_PROVIDER=resend` for Resend HTTPS delivery or `MAIL_PROVIDER=smtp` for Gmail SMTP with an App Password. Production rejects `console` and `none`; there is no fallback between providers. The SMTP adapter uses implicit TLS to `smtp.gmail.com:465`, validates the server certificate, bounds the complete operation by `MAIL_TIMEOUT_SECS`, caps SMTP responses and message size, and does not log SMTP replies or credentials.
-
-For Gmail SMTP, enable 2-Step Verification on the Google account, create an App Password for the account, and inject `SMTP_USERNAME` and `SMTP_APP_PASSWORD` from the deployment secret manager. The account may require a verified sender or configured “send mail as” alias matching `MAIL_FROM`. Do not use the account's normal Google password. Rotate by creating a replacement App Password, deploying it, verifying delivery, and revoking the old one. Treat provider acceptance as queued/accepted by the SMTP server, not proof of inbox placement.
-
-For custom sender domains, publish and verify SPF and DKIM records with the actual sending provider and publish a DMARC policy, initially monitor-only if needed. Avoid multiple conflicting SPF records. Monitor provider acceptance/rejection, SMTP authentication failures, queue age, retries and expired tokens without logging recipient addresses, message bodies, or magic links. SMTP timeouts after DATA may cause duplicate delivery because the server may have accepted the message before the connection failed.
-
 ## Configuration and secrets
 
 - Keep production credentials in the deployment platform's secret manager. Never put real values in `.env`, `.env.example`, CI variables, logs, or tickets.
