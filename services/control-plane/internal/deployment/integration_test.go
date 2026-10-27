@@ -499,7 +499,7 @@ FROM control_plane_audit_events
 WHERE event_type = 'deployment.failed'
   AND target_type = 'deployment'
   AND target_id = $1
-  AND request_id = $2
+  AND metadata->>'provider_request_id' = $2
   AND metadata->>'failure_code' = 'max_attempts_exceeded'`,
 		created.Deployment.ID.String(), created.Deployment.ProviderRequestID,
 	).Scan(&auditCount)
@@ -651,7 +651,7 @@ FROM control_plane_audit_events
 WHERE event_type = 'deployment.ready'
   AND target_type = 'deployment'
   AND target_id = $1
-  AND request_id = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&auditCount)
+  AND metadata->>'provider_request_id' = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&auditCount)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,7 +991,7 @@ FROM control_plane_audit_events
 WHERE event_type = 'deployment.failed'
   AND target_type = 'deployment'
   AND target_id = $1
-  AND request_id = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&count)
+  AND metadata->>'provider_request_id' = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&count)
 	if err != nil {
 		t.Fatal(err)
 	}

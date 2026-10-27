@@ -15,7 +15,7 @@ This document defines the integration contract to implement jointly with the Bac
 - Runtime API keys must not be used to call Control Plane management endpoints.
 - Provider responses are untrusted input until IDs, outcome, readiness evidence, and public error mapping are validated.
 - Provider diagnostics must never be copied into public failure messages or logs without an explicit safe diagnostic policy.
-- Outcome state transitions (`ready`, `failed`, and retry scheduling) are recorded in the Control Plane audit log in the same transaction as the deployment state update; audit failure rolls back the outcome transition.
+- Outcome state transitions (`ready`, `failed`, and retry scheduling) are recorded in the Control Plane audit log in the same transaction as the deployment state update; audit failure rolls back the outcome transition. Synchronous audit records carry the HTTP request ID in `request_id`; asynchronous worker outcomes leave that field null and include the stable `provider_request_id` in audit metadata for correlation.
 
 ## Provision request
 

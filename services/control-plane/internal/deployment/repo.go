@@ -158,6 +158,7 @@ RETURNING id`,
 		"configuration_version_id": versionID.String(),
 		"target_mode":              string(mode),
 		"provider":                 string(ProviderUnavailable),
+		"provider_request_id":      providerReq,
 	})
 	if err := r.insertAudit(ctx, tx, auth, "deployment.create", id.String(), requestID, meta, now); err != nil {
 		return CreateResult{}, err
@@ -346,7 +347,8 @@ RETURNING id, environment_id, configuration_version_id, provider_request_id, att
 			"status":        string(StatusFailed),
 			"failure_code":  "max_attempts_exceeded",
 			"attempt_count": d.AttemptCount,
-			"max_attempts":  d.MaxAttempts,
+			"max_attempts":        d.MaxAttempts,
+			"provider_request_id": d.ProviderRequestID,
 		})
 		if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.failed", metadata, now); err != nil {
 			return nil, err
@@ -454,7 +456,8 @@ WHERE id = $1
 		"status":        string(status),
 		"failure_code":  code,
 		"attempt_count": d.AttemptCount,
-		"max_attempts":  d.MaxAttempts,
+		"max_attempts":        d.MaxAttempts,
+		"provider_request_id": d.ProviderRequestID,
 	})
 	if err := r.insertOutcomeAudit(ctx, tx, d, eventType, metadata, now); err != nil {
 		return err
@@ -607,6 +610,7 @@ WHERE id = $1
 		"configuration_version_id": d.ConfigurationVersionID.String(),
 		"readiness_probe_id":       strings.TrimSpace(res.ReadinessProbeID),
 		"readiness_observed_at":    observedAt.Format(time.RFC3339Nano),
+		"provider_request_id":      d.ProviderRequestID,
 	})
 	if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.ready", metadata, now); err != nil {
 		return err
@@ -629,11 +633,11 @@ func (r *Repository) insertOutcomeAudit(ctx context.Context, tx pgx.Tx, d Deploy
 INSERT INTO control_plane_audit_events (
   id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
 )
-SELECT $1, NULL, p.organization_id, $2, 'deployment', $3, $4, $5, $6
+SELECT $1, NULL, p.organization_id, $2, 'deployment', $3, NULL, $4, $5
 FROM project_environments e
 JOIN projects p ON p.id = e.project_id
-WHERE e.id = $7`,
-		uuid.Must(uuid.NewV7()), eventType, d.ID.String(), d.ProviderRequestID, meta, now, d.EnvironmentID,
+WHERE e.id = $6`,
+		uuid.Must(uuid.NewV7()), eventType, d.ID.String(), meta, now, d.EnvironmentID,
 	)
 	if err != nil {
 		return err
