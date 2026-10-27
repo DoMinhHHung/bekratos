@@ -72,6 +72,42 @@ func TestIdentityProfileVerifierFailsClosedOnUpstreamFailure(t *testing.T) {
 	}
 }
 
+func TestIdentityProfileVerifierRejectsMismatchedSession(t *testing.T) {
+    userID := uuid.New()
+    expectedSessionID := uuid.New()
+    serverSessionID := uuid.New()
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        _ = json.NewEncoder(w).Encode(map[string]any{
+            "subject": userID.String(),
+            "session_id": serverSessionID.String(),
+            "account_status": "active",
+            "primary_email_verified": true,
+        })
+    }))
+    defer server.Close()
+
+    verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+    _, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, expectedSessionID)
+    if !errors.Is(err, ErrIdentityUnauthorized) {
+        t.Fatalf("error = %v, want ErrIdentityUnauthorized", err)
+    }
+}
+
+func TestIdentityProfileVerifierTimesOutAndFailsClosed(t *testing.T) {
+    userID := uuid.New()
+    sessionID := uuid.New()
+    server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        <-r.Context().Done()
+    }))
+    defer server.Close()
+
+    verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", 10*time.Millisecond)
+    _, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, sessionID)
+    if !errors.Is(err, ErrIdentityUnavailable) {
+        t.Fatalf("error = %v, want ErrIdentityUnavailable", err)
+    }
+}
+
 func TestIdentityProfileVerifierRejectsOversizedResponse(t *testing.T) {
 	userID := uuid.New()
 	sessionID := uuid.New()
