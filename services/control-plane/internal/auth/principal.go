@@ -16,6 +16,8 @@ type Principal struct {
 	Issuer    string
 	Audience  string
 	ExpiresAt int64
+	PrimaryEmail string
+	EmailVerified bool
 }
 
 func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
