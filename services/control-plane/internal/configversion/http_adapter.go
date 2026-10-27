@@ -60,7 +60,8 @@ func (a *HTTPApplyAdapter) Apply(ctx context.Context, req ApplyRequest) (ApplyRe
 		ExpectedActiveVersionID: req.ExpectedActiveVersionID,
 	}
 	status, responseBody, err := a.client.Post(ctx, "/v1/internal/configuration/apply", req.ApplyRequestID, body)
-	if err != nil || status == http.StatusRequestTimeout || status >= 500 {
+	if err != nil || status == http.StatusRequestTimeout || status >= 500 ||
+		status < 200 || status >= 300 && status < 400 {
 		return ApplyResult{}, AmbiguousApplyError{}
 	}
 	if status == http.StatusTooManyRequests {
