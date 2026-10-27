@@ -344,9 +344,9 @@ RETURNING id, environment_id, configuration_version_id, provider_request_id, att
 	}
 	for _, d := range exhausted {
 		metadata, _ := json.Marshal(map[string]any{
-			"status":        string(StatusFailed),
-			"failure_code":  "max_attempts_exceeded",
-			"attempt_count": d.AttemptCount,
+			"status":              string(StatusFailed),
+			"failure_code":        "max_attempts_exceeded",
+			"attempt_count":       d.AttemptCount,
 			"max_attempts":        d.MaxAttempts,
 			"provider_request_id": d.ProviderRequestID,
 		})
@@ -453,9 +453,9 @@ WHERE id = $1
 		eventType = "deployment.retry_scheduled"
 	}
 	metadata, _ := json.Marshal(map[string]any{
-		"status":        string(status),
-		"failure_code":  code,
-		"attempt_count": d.AttemptCount,
+		"status":              string(status),
+		"failure_code":        code,
+		"attempt_count":       d.AttemptCount,
 		"max_attempts":        d.MaxAttempts,
 		"provider_request_id": d.ProviderRequestID,
 	})
