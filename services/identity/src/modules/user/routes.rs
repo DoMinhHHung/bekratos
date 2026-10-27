@@ -34,7 +34,9 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
     params(("x-control-plane-service-token" = String, Header, description = "Shared Control Plane service credential")),
     responses(
         (status = 200, description = "Active session and verified primary email state", body = SessionValidationResponse),
-        (status = 401, description = "Invalid service credential or inactive user session")
+        (status = 401, description = "Invalid service credential or inactive user session"),
+        (status = 429, description = "Internal session validation rate limit exceeded"),
+        (status = 503, description = "Rate limiter unavailable")
     ),
     security(("bearer_auth" = [])),
     tag = "Internal"
@@ -56,6 +58,16 @@ pub(crate) async fn validate_internal_session(
         return Err(AppError::Unauthorized);
     }
 
+    state
+        .rate_limiter
+        .check_and_incr(
+            "internal_session_validate",
+            "service",
+            &state.config.control_plane_service_token,
+            1200,
+            60,
+        )
+        .await?;
     let token = extract_bearer(&headers)?;
     let session = service::validate_session(&state, token).await?;
     Ok(Json(session))
