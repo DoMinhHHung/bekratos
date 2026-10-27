@@ -92,6 +92,10 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
             assert!(config.readiness_require_redis);
             assert_eq!(config.mail_provider, "console");
             assert_eq!(config.mail_from, "noreply@localhost");
+            assert_eq!(config.mail_api_key, "");
+            assert_eq!(config.mail_api_base_url, "https://api.resend.com");
+            assert_eq!(config.mail_timeout_secs, 10);
+            assert!(config.identity_service_api_token.is_none());
             assert_eq!(config.argon2_memory_kib, 19_456);
             assert_eq!(config.argon2_iterations, 2);
             assert_eq!(config.argon2_parallelism, 1);
@@ -118,6 +122,9 @@ fn explicit_settings_override_every_optional_default() {
             ("READINESS_REQUIRE_REDIS", "off"),
             ("MAIL_PROVIDER", "none"),
             ("MAIL_FROM", "test@example.test"),
+            ("MAIL_API_KEY", "synthetic-resend-test-api-key"),
+            ("MAIL_API_BASE_URL", "https://api.resend.com"),
+            ("MAIL_TIMEOUT_SECS", "20"),
             ("ARGON2_MEMORY_KIB", "32768"),
             ("ARGON2_ITERATIONS", "3"),
             ("ARGON2_PARALLELISM", "2"),
@@ -141,6 +148,9 @@ fn explicit_settings_override_every_optional_default() {
         assert!(!config.readiness_require_redis);
         assert_eq!(config.mail_provider, "none");
         assert_eq!(config.mail_from, "test@example.test");
+        assert_eq!(config.mail_api_key, "synthetic-resend-test-api-key");
+        assert_eq!(config.mail_api_base_url, "https://api.resend.com");
+        assert_eq!(config.mail_timeout_secs, 20);
         assert_eq!(config.argon2_memory_kib, 32_768);
         assert_eq!(config.argon2_iterations, 3);
         assert_eq!(config.argon2_parallelism, 2);
