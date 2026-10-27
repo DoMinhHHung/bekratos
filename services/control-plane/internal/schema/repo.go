@@ -66,8 +66,6 @@ WHERE environment_id = $1`
 			EnvironmentID: envID,
 			Revision:      0,
 			Document:      EmptyDocument(),
-			CreatedAt:     time.Time{},
-			UpdatedAt:     time.Time{},
 		}, nil
 	}
 	if err != nil {
@@ -125,7 +123,6 @@ SELECT revision, true FROM environment_schema_drafts WHERE environment_id = $1 F
 
 	now := time.Now().UTC()
 	newRevision := currentRevision + 1
-	var out Draft
 
 	if !exists {
 		_, err = tx.Exec(ctx, `
@@ -134,33 +131,38 @@ VALUES ($1, $2, $3, $4, $4)`,
 			envID, newRevision, raw, now,
 		)
 	} else {
-		_, err = tx.Exec(ctx, `
+		ct, execErr := tx.Exec(ctx, `
 UPDATE environment_schema_drafts
 SET revision = $2, schema_json = $3, updated_at = $4
 WHERE environment_id = $1 AND revision = $5`,
 			envID, newRevision, raw, now, expectedRevision,
 		)
+		if execErr != nil {
+			return Draft{}, execErr
+		}
+		if ct.RowsAffected() != 1 {
+			return Draft{}, ErrConflictRevision
+		}
 	}
 	if err != nil {
 		return Draft{}, err
 	}
 
-	auditPayload, _ := json.Marshal(map[string]any{
+	metadata, _ := json.Marshal(map[string]any{
 		"environment_id":    envID.String(),
 		"previous_revision": expectedRevision,
 		"new_revision":      newRevision,
 		"action":            action,
 	})
 	_, err = tx.Exec(ctx, `
-INSERT INTO audit_events (
-  id, organization_id, actor_identity_user_id, action, resource_type, resource_id,
-  request_id, payload, created_at
+INSERT INTO control_plane_audit_events (
+  id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
 )
-SELECT $1, p.organization_id, $2, $3, 'environment_schema_draft', $4, $5, $6, $7
+SELECT $1, $2, p.organization_id, $3, 'environment_schema_draft', $4, $5, $6, $7
 FROM project_environments e
 JOIN projects p ON p.id = e.project_id
 WHERE e.id = $4`,
-		uuid.Must(uuid.NewV7()), actorID, action, envID, requestID, auditPayload, now,
+		uuid.Must(uuid.NewV7()), actorID, action, envID.String(), requestID, metadata, now,
 	)
 	if err != nil {
 		return Draft{}, err
@@ -170,12 +172,11 @@ WHERE e.id = $4`,
 		return Draft{}, err
 	}
 
-	out = Draft{
+	return Draft{
 		EnvironmentID: envID,
 		Revision:      newRevision,
 		Document:      doc,
 		CreatedAt:     now,
 		UpdatedAt:     now,
-	}
-	return out, nil
+	}, nil
 }
