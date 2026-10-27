@@ -42,20 +42,20 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 
-	cfg := &Config{
-		Host              : getEnv("HOST", "0.0.0.0"),
-		Port              : 8080,
-		LogLevel          : strings.ToLower(getEnv("LOG_LEVEL", "info")),
-		BodyLimitBytes    : 1 << 20,
-		ReadTimeout       : 15 * time.Second,
-		WriteTimeout      : 15 * time.Second,
-		IdleTimeout       : 60 * time.Second,
-		ShutdownTimeout   : 15 * time.Second,
-		ReadinessTimeout  : 2 * time.Second,
-		MigrateOnStartup  : false,
-		JWKSCacheTTL      : 60 * time.Second,
-		JWKSHTTPTimeout   : 3 * time.Second,
-		JWTLeeway         : 30 * time.Second,
+	cfg: = &Config{
+		Host:               getEnv("HOST", "0.0.0.0"),
+		Port:               8080,
+		LogLevel:           strings.ToLower(getEnv("LOG_LEVEL", "info")),
+		BodyLimitBytes:     1 << 20,
+		ReadTimeout:        15 * time.Second,
+		WriteTimeout:       15 * time.Second,
+		IdleTimeout:        60 * time.Second,
+		ShutdownTimeout:    15 * time.Second,
+		ReadinessTimeout:   2 * time.Second,
+		MigrateOnStartup:   false,
+		JWKSCacheTTL:       60 * time.Second,
+		JWKSHTTPTimeout:    3 * time.Second,
+		JWTLeeway:          30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
 		RuntimeHTTPTimeout: 5 * time.Second,
 	}
@@ -164,7 +164,7 @@ func Load() (*Config, error) {
 
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
-	default:
+	default: 
 		return nil, fmt.Errorf("invalid LOG_LEVEL: %q", cfg.LogLevel)
 	}
 
@@ -191,7 +191,7 @@ func loadDotEnv() error {
 		return nil
 	}
 
-	candidates := []string{".env"}
+	candidates: = []string{".env"}
 	if wd, err := os.Getwd(); err == nil {
 		candidates = append(candidates,
 			filepath.Join(wd, ".env"),
@@ -222,7 +222,7 @@ func validateJWKSURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
-	host    : = strings.ToLower(u.Hostname())
+	host:     = strings.ToLower(u.Hostname())
 	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
@@ -232,13 +232,13 @@ func validateJWKSURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
-	default:
+	default: 
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
 }
 
 func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error) {
-	v := os.Getenv(key)
+	v: = os.Getenv(key)
 	if v == "" {
 		return fallback, nil
 	}
@@ -254,7 +254,7 @@ func validateRuntimeURL(raw string) error {
 	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL without credentials, query, or fragment")
 	}
-	host    : = strings.ToLower(u.Hostname())
+	host:     = strings.ToLower(u.Hostname())
 	loopback: = host == "localhost" || host == "127.0.0.1" || host == "::1"
 	switch u.Scheme {
 	case "https":
@@ -264,7 +264,7 @@ func validateRuntimeURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
-	default:
+	default: 
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
 	}
 }
