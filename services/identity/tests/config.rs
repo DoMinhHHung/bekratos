@@ -11,6 +11,7 @@ const REQUIRED_ENV: &[(&str, &str)] = &[
     ("MAGIC_LINK_HMAC_KEYS", "test-key:0123456789abcdef"),
     ("MAGIC_LINK_ACTIVE_KID", "test-key"),
     ("APP_PUBLIC_BASE_URL", "https://identity.example.test"),
+    ("APP_ENV", "test"),
     ("JWT_ISSUER", "https://identity.example.test"),
     ("JWT_AUDIENCE", "identity-api"),
     (
@@ -82,6 +83,7 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
             assert_eq!(config.redis_url, REQUIRED_ENV[1].1);
             assert_eq!(config.magic_link_hmac_keys, REQUIRED_ENV[2].1);
             assert_eq!(config.magic_link_active_kid, "test-key");
+            assert_eq!(config.app_env, "test");
             assert_eq!(config.app_public_base_url, "https://identity.example.test");
             assert_eq!(config.jwt_issuer, "https://identity.example.test");
             assert_eq!(config.jwt_audience, "identity-api");
@@ -111,9 +113,25 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
 }
 
 #[test]
+fn production_rejects_simulated_email_delivery() {
+    isolated("production_rejects_simulated_email_delivery", || {
+        env::set_var("APP_ENV", "production");
+        env::set_var("MAIL_PROVIDER", "console");
+        assert_config_error("production requires MAIL_PROVIDER=resend");
+        env::set_var("MAIL_PROVIDER", "none");
+        assert_config_error("production requires MAIL_PROVIDER=resend");
+        env::set_var("MAIL_PROVIDER", "resend");
+        env::set_var("MAIL_API_KEY", "synthetic-config-test-mail-key-012345");
+        env::set_var("APP_PUBLIC_BASE_URL", "http://identity.example.test");
+        assert_config_error("APP_PUBLIC_BASE_URL must use HTTPS");
+    });
+}
+
+#[test]
 fn explicit_settings_override_every_optional_default() {
     isolated("explicit_settings_override_every_optional_default", || {
         for (key, value) in [
+            ("APP_ENV", "development"),
             ("HOST", "127.0.0.1"),
             ("PORT", "9090"),
             ("REQUEST_TIMEOUT_SECS", "5"),
@@ -139,6 +157,7 @@ fn explicit_settings_override_every_optional_default() {
             env::set_var(key, value);
         }
         let config = Config::from_env().unwrap();
+        assert_eq!(config.app_env, "development");
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 9090);
         assert_eq!(config.bind_addr, "127.0.0.1:9090".parse().unwrap());
