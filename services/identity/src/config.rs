@@ -23,6 +23,10 @@ pub struct Config {
     pub mail_from: String,
     pub mail_api_key: String,
     pub mail_timeout_secs: u64,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: String,
+    pub smtp_app_password: String,
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
@@ -58,6 +62,10 @@ impl std::fmt::Debug for Config {
             .field("mail_from", &self.mail_from)
             .field("mail_api_key", &"[REDACTED]")
             .field("mail_timeout_secs", &self.mail_timeout_secs)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("smtp_username", &"[REDACTED]")
+            .field("smtp_app_password", &"[REDACTED]")
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -155,9 +163,9 @@ impl Config {
         let mail_provider = env::var("MAIL_PROVIDER")
             .unwrap_or_else(|_| "console".to_string())
             .to_ascii_lowercase();
-        if !matches!(mail_provider.as_str(), "console" | "none" | "resend") {
+        if !matches!(mail_provider.as_str(), "console" | "none" | "resend" | "smtp") {
             return Err(AppError::config(
-                "MAIL_PROVIDER must be console, none, or resend",
+                "MAIL_PROVIDER must be console, none, resend, or smtp",
             ));
         }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
@@ -171,13 +179,40 @@ impl Config {
                 "MAIL_TIMEOUT_SECS must be between 1 and 60",
             ));
         }
+        let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "smtp.gmail.com".to_string());
+        let smtp_port: u16 = env::var("SMTP_PORT")
+            .unwrap_or_else(|_| "465".to_string())
+            .parse()
+            .map_err(|_| AppError::config("SMTP_PORT must be a valid u16"))?;
+        let smtp_username = env::var("SMTP_USERNAME").unwrap_or_default();
+        let smtp_app_password = env::var("SMTP_APP_PASSWORD")
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
         if mail_provider == "resend" && mail_api_key.trim().is_empty() {
             return Err(AppError::config(
                 "MAIL_API_KEY is required when MAIL_PROVIDER=resend",
             ));
         }
-        if app_env == "production" && mail_provider != "resend" {
-            return Err(AppError::config("production requires MAIL_PROVIDER=resend"));
+        if mail_provider == "smtp" {
+            if smtp_host != "smtp.gmail.com" {
+                return Err(AppError::config("SMTP_HOST must be smtp.gmail.com"));
+            }
+            if smtp_port != 465 {
+                return Err(AppError::config("SMTP_PORT must be 465 for implicit TLS"));
+            }
+            if smtp_username.trim().is_empty() || smtp_app_password.is_empty() {
+                return Err(AppError::config(
+                    "SMTP_USERNAME and SMTP_APP_PASSWORD are required when MAIL_PROVIDER=smtp",
+                ));
+            }
+            if smtp_username.contains(['\\r', '\\n']) || smtp_app_password.contains(['\\r', '\\n']) {
+                return Err(AppError::config("SMTP credentials contain invalid characters"));
+            }
+        }
+        if app_env == "production" && !matches!(mail_provider.as_str(), "resend" | "smtp") {
+            return Err(AppError::config("production requires MAIL_PROVIDER=resend or smtp"));
         }
         if app_env == "production" && !app_public_base_url.starts_with("https://") {
             return Err(AppError::config(
@@ -260,6 +295,10 @@ impl Config {
             mail_from,
             mail_api_key,
             mail_timeout_secs,
+            smtp_host,
+            smtp_port,
+            smtp_username,
+            smtp_app_password,
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
