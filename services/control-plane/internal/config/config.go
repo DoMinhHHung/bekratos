@@ -164,7 +164,7 @@ func Load() (*Config, error) {
 
 	switch cfg.LogLevel {
 	case "debug", "info", "warn", "error":
-	default:  
+	default:
 		return nil, fmt.Errorf("invalid LOG_LEVEL: %q", cfg.LogLevel)
 	}
 
@@ -232,7 +232,7 @@ func validateJWKSURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("IDENTITY_JWKS_URL must use https except for loopback hosts")
-	default:  
+	default:
 		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
 	}
 }
@@ -264,7 +264,7 @@ func validateRuntimeURL(raw string) error {
 			return nil
 		}
 		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
-	default:  
+	default:
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
 	}
 }
