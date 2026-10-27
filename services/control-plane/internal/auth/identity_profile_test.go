@@ -27,7 +27,10 @@ func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"subject": userID.String(), "session_id": sessionID.String(), "account_status": "active", "primary_email_verified": true,
+			"subject": userID.String(),
+			"session_id": sessionID.String(),
+			"account_status": "active",
+			"primary_email_verified": true,
 		})
 	}))
 	defer server.Close()
