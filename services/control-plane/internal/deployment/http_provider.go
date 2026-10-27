@@ -23,10 +23,10 @@ type HTTPProvider struct {
 }
 
 type runtimeProvisionRequest struct {
-	DeploymentID           uuid.UUID `json:"deployment_id"`
-	EnvironmentID          uuid.UUID `json:"environment_id"`
-	ConfigurationVersionID uuid.UUID `json:"configuration_version_id"`
-	IdempotencyKey         string    `json:"idempotency_key"`
+	DeploymentID           uuid.UUID  `json:"deployment_id"`
+	EnvironmentID          uuid.UUID  `json:"environment_id"`
+	ConfigurationVersionID uuid.UUID  `json:"configuration_version_id"`
+	IdempotencyKey         string     `json:"idempotency_key"`
 	TargetMode             TargetMode `json:"target_mode"`
 }
 
