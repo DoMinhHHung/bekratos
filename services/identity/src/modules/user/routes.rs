@@ -3,12 +3,15 @@ use std::net::SocketAddr;
 use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::HeaderMap;
 use axum::routing::{delete, get};
-use subtle::ConstantTimeEq;
 use axum::{Json, Router};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use validator::Validate;
 
-use super::dto::{MessageResponse, ProfileResponse, SessionListResponse, SessionValidationResponse, UpdateProfileRequest};
+use super::dto::{
+    MessageResponse, ProfileResponse, SessionListResponse, SessionValidationResponse,
+    UpdateProfileRequest,
+};
 use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
