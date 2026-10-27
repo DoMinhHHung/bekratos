@@ -254,13 +254,13 @@ func (r *Repository) Claim(ctx context.Context, workerID string, lease time.Dura
 	leaseUntil := now.Add(lease)
 	rows, err := tx.Query(ctx, `
 WITH candidates AS (
-  SELECT id
-  FROM deployments
-  WHERE status IN ('queued', 'provisioning')
-    AND next_attempt_at <= $1
-    AND (lease_expires_at IS NULL OR lease_expires_at < $1)
-  ORDER BY next_attempt_at
-  FOR UPDATE SKIP LOCKED
+  SELECT d.id AS deployment_id
+  FROM deployments d
+  WHERE d.status IN ('queued', 'provisioning')
+    AND d.next_attempt_at <= $1
+    AND (d.lease_expires_at IS NULL OR d.lease_expires_at < $1)
+  ORDER BY d.next_attempt_at
+  FOR UPDATE OF d SKIP LOCKED
   LIMIT $2
 )
 UPDATE deployments d
@@ -272,8 +272,14 @@ SET status = 'provisioning',
     started_at = COALESCE(d.started_at, $1),
     updated_at = $1
 FROM candidates c
-WHERE d.id = c.id
-RETURNING `+deploymentColumns, now, limit, workerID, leaseUntil)
+WHERE d.id = c.deployment_id
+RETURNING
+  d.id, d.environment_id, d.configuration_version_id, d.target_mode, d.provider, d.status,
+  d.failure_code, d.failure_message, d.attempt_count, d.max_attempts, d.idempotency_key, d.provider_request_id,
+  d.lease_owner, d.lease_expires_at, d.fencing_token, d.next_attempt_at,
+  d.provider_url, d.provider_host, d.provider_region,
+  d.created_by_identity_user_id, d.created_at, d.updated_at, d.started_at, d.ready_at, d.finished_at`,
+		now, limit, workerID, leaseUntil)
 	if err != nil {
 		return nil, err
 	}
