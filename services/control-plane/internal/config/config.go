@@ -24,12 +24,12 @@ type Config struct {
 	ShutdownTimeout     time.Duration
 	ReadinessTimeout    time.Duration
 	MigrateOnStartup    bool
-	IdentityJWKSURL     string
-	IdentityProfileURL  string
+	IdentityJWKSURL      string
+	IdentityProfileURL   string
 	IdentityServiceToken string
-	RuntimeAPIURL       string
-	RuntimeServiceToken string
-	RuntimeHTTPTimeout  time.Duration
+	RuntimeAPIURL        string
+	RuntimeServiceToken  string
+	RuntimeHTTPTimeout   time.Duration
 	JWTIssuer           string
 	JWTAudience         string
 	JWKSCacheTTL        time.Duration
