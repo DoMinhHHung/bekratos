@@ -411,7 +411,7 @@ WHERE id = $1
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
-		d.ID, string(status), code, sanitizeMessage(message), next, finished, now, d.FencingToken, workerID,
+		d.ID, string(status), code, message, next, finished, now, d.FencingToken, workerID,
 	)
 	if err != nil {
 		return err
@@ -464,18 +464,20 @@ SET status = 'ready',
     provider_url = $2,
     provider_host = $3,
     provider_region = $4,
+    readiness_probe_id = $5,
+    readiness_observed_at = $6,
     lease_owner = NULL,
     lease_expires_at = NULL,
-    ready_at = $5,
-    finished_at = $5,
-    updated_at = $5
+    ready_at = $7,
+    finished_at = $7,
+    updated_at = $7
 WHERE id = $1
   AND fencing_token = $6
   AND lease_owner = $7
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
-		d.ID, url, host, region, now, d.FencingToken, workerID,
+		d.ID, url, host, region, strings.TrimSpace(res.ReadinessProbeID), observedAt, now, d.FencingToken, workerID,
 	)
 	if err != nil {
 		return err
@@ -500,7 +502,7 @@ const deploymentColumns = `
 id, environment_id, configuration_version_id, target_mode, provider, status,
 failure_code, failure_message, attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
 lease_owner, lease_expires_at, fencing_token, next_attempt_at,
-provider_url, provider_host, provider_region,
+provider_url, provider_host, provider_region, readiness_probe_id, readiness_observed_at,
 created_by_identity_user_id, created_at, updated_at, started_at, ready_at, finished_at`
 
 const deploymentSelect = `SELECT ` + deploymentColumns + ` FROM deployments `
@@ -514,7 +516,7 @@ func scanDeployment(row interface {
 		&d.ID, &d.EnvironmentID, &d.ConfigurationVersionID, &mode, &provider, &status,
 		&d.FailureCode, &d.FailureMessage, &d.AttemptCount, &d.MaxAttempts, &d.IdempotencyKey, &d.RequestFingerprint, &d.ProviderRequestID,
 		&d.LeaseOwner, &d.LeaseExpiresAt, &d.FencingToken, &d.NextAttemptAt,
-		&d.ProviderURL, &d.ProviderHost, &d.ProviderRegion,
+		&d.ProviderURL, &d.ProviderHost, &d.ProviderRegion, &d.ReadinessProbeID, &d.ReadinessObservedAt,
 		&d.CreatedByUserID, &d.CreatedAt, &d.UpdatedAt, &d.StartedAt, &d.ReadyAt, &d.FinishedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
