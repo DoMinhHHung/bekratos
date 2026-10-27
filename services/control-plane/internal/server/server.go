@@ -58,7 +58,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	apiKeyHandlers := apikey.NewHandlers(apiKeySvc)
 
 	deployRepo := deployment.NewRepository(pool)
-	deploySvc := deployment.NewService(deployRepo, deployment.NewUnavailableProvider(), log)
+	var deployProvider deployment.Provider = deployment.NewUnavailableProvider()
+	if cfg.RuntimeAPIURL != "" && cfg.RuntimeServiceToken != "" {
+		deployProvider = deployment.NewHTTPProvider(cfg.RuntimeAPIURL, cfg.RuntimeServiceToken, cfg.RuntimeHTTPTimeout)
+	}
+	deploySvc := deployment.NewService(deployRepo, deployProvider, log)
 	deployHandlers := deployment.NewHandlers(deploySvc)
 	deployWorker := deployment.NewWorker(deploySvc, "control-plane-deployment-worker", log)
 
