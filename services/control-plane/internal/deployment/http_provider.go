@@ -71,7 +71,7 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 		return ProvisionResult{Outcome: OutcomeUnavailable, Code: "provider_unavailable", RequestID: req.ProviderRequestID}, ErrProviderUnavailable
 	}
 
-	payload: = runtimeProvisionRequest{
+	payload := runtimeProvisionRequest{
 		DeploymentID:           req.DeploymentID,
 		EnvironmentID:          req.EnvironmentID,
 		ConfigurationVersionID: req.ConfigurationVersionID,
