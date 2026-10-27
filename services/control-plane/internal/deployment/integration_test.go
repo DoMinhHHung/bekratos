@@ -171,7 +171,10 @@ func TestRecordingProviderReadyRequiresValidatedEvidence(t *testing.T) {
 		Result: ProvisionResult{
 			Outcome:       OutcomeSuccess,
 			EnvironmentID: envID,
-			VersionID:     versionID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
 			Host:          "runtime.example.test",
 			URL:           "https://runtime.example.test",
 			Region:        "local",
@@ -203,7 +206,10 @@ func TestReadyRejectedOnEnvironmentMismatch(t *testing.T) {
 		Result: ProvisionResult{
 			Outcome:       OutcomeSuccess,
 			EnvironmentID: uuid.Must(uuid.NewV7()),
-			VersionID:     versionID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
 			Host:          "evil.example",
 		},
 	}
@@ -338,7 +344,11 @@ func TestStaleWorkerCannotMarkReady(t *testing.T) {
 	err = repo.MarkReady(ctx, d, "worker-b", ProvisionResult{
 		Outcome:       OutcomeSuccess,
 		EnvironmentID: d.EnvironmentID,
-		VersionID:     d.ConfigurationVersionID,
+		VersionID:            d.ConfigurationVersionID,
+			RequestID:             d.ProviderRequestID,
+			ReadinessProbePassed:  true,
+			ReadinessProbeID:      "test-readiness-probe",
+			ReadinessObservedAt:   time.Now().UTC(),
 		Host:          "x",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
@@ -389,7 +399,10 @@ WHERE id = $1`, d.ID)
 	err = repo.MarkReady(ctx, d, "worker-lease", ProvisionResult{
 		Outcome:       OutcomeSuccess,
 		EnvironmentID: envID,
-		VersionID:     versionID,
+		VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
 		Host:          "host.example",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
@@ -554,7 +567,10 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 		Result: ProvisionResult{
 			Outcome:       OutcomeSuccess,
 			EnvironmentID: envID,
-			VersionID:     versionID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
 			Host:          "ok.example",
 			URL:           "https://ok.example",
 		},
