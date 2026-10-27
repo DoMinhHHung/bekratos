@@ -77,7 +77,10 @@ async fn introspect(
         );
     }
 
-    let claims = match state.jwt_verifier.verify_access_token(&request.access_token) {
+    let claims = match state
+        .jwt_verifier
+        .verify_access_token(&request.access_token)
+    {
         Ok(claims) => claims,
         Err(_) => return unauthorized(),
     };
@@ -153,9 +156,10 @@ async fn introspect(
         verified_primary_email,
     };
     let mut response = Json(response).into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "no-store".parse().expect("static header"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store".parse().expect("static header"),
+    );
     response
 }
 
@@ -168,9 +172,17 @@ fn unauthorized() -> Response {
 }
 
 fn error_response(status: StatusCode, code: &'static str, message: &'static str) -> Response {
-    let mut response = (status, Json(ErrorResponse { error: code, message })).into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "no-store".parse().expect("static header"));
+    let mut response = (
+        status,
+        Json(ErrorResponse {
+            error: code,
+            message,
+        }),
+    )
+        .into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        "no-store".parse().expect("static header"),
+    );
     response
 }
