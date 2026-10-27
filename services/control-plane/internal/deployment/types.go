@@ -25,7 +25,10 @@ const TargetModeShared TargetMode = "shared"
 
 type ProviderName string
 
-const ProviderUnavailable ProviderName = "unavailable"
+const (
+	ProviderUnavailable ProviderName = "unavailable"
+	ProviderRuntimeHTTP ProviderName = "runtime_http"
+)
 
 type Deployment struct {
 	ID                     uuid.UUID
