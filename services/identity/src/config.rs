@@ -176,7 +176,7 @@ impl Config {
             .ok()
             .filter(|value| !value.is_empty());
         if let Some(token) = identity_service_api_token.as_ref() {
-            if token.len() < 32 || token.contains("change-me") {
+            if token.len() < 32 || token.contains("change-me") || token.contains("replace-with") {
                 return Err(AppError::config(
                     "IDENTITY_SERVICE_API_TOKEN must contain at least 32 non-placeholder characters",
                 ));
@@ -299,7 +299,7 @@ fn validate_http_url(raw: &str, name: &str, allow_loopback_http: bool) -> AppRes
         return Err(AppError::config(format!("{name} must be an absolute HTTP(S) URL")));
     };
     let authority = uri.authority().map(|value| value.as_str()).unwrap_or_default();
-    if authority.contains('@') || uri.query().is_some() || uri.fragment().is_some() {
+    if authority.contains('@') || uri.query().is_some() {
         return Err(AppError::config(format!("{name} must not contain userinfo, query, or fragment")));
     }
     let loopback = matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1");
