@@ -174,6 +174,11 @@ func (s *Service) processJob(ctx context.Context, job ApplyJob, lease time.Durat
 		if errors.As(err, &retryable) {
 			return s.repo.ScheduleJobRetry(ctx, job, job.FencingToken, retryable.Code, retryable.Message, lease)
 		}
+		var ambiguous AmbiguousApplyError
+		if errors.As(err, &ambiguous) {
+			return s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "runtime_apply_ambiguous",
+				"runtime apply outcome is unknown; lookup by apply_request_id is required")
+		}
 		code := "runtime_error"
 		msg := "runtime apply failed"
 		if errors.Is(err, ErrRuntimeUnavailable) {

@@ -48,8 +48,18 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	schemaSvc := schema.NewService(schemaRepo, orgRepo, projectRepo)
 	schemaHandlers := schema.NewHandlers(schemaSvc)
 
+	runtimeApplyAdapter := configversion.ApplyAdapter(configversion.NewUnavailableApplyAdapter())
+	deploymentProvider := deployment.Provider(deployment.NewUnavailableProvider())
+	if cfg.RuntimeAPIURL != "" && cfg.RuntimeAPIToken != "" {
+		runtimeApplyAdapter = configversion.NewHTTPApplyAdapter(cfg.RuntimeAPIURL, cfg.RuntimeAPIToken, cfg.RuntimeHTTPTimeout)
+		deploymentProvider = deployment.NewHTTPProvider(cfg.RuntimeAPIURL, cfg.RuntimeAPIToken, cfg.RuntimeHTTPTimeout)
+		log.Info("Runtime integration enabled", "provider", "runtime_http")
+	} else {
+		log.Warn("Runtime integration disabled", "reason", "runtime API URL/token not configured")
+	}
+
 	configVersionRepo := configversion.NewRepository(pool)
-	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter(), log)
+	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, runtimeApplyAdapter, log)
 	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
 	applyWorker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
 
@@ -58,7 +68,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	apiKeyHandlers := apikey.NewHandlers(apiKeySvc)
 
 	deployRepo := deployment.NewRepository(pool)
-	deploySvc := deployment.NewService(deployRepo, deployment.NewUnavailableProvider(), log)
+	deploySvc := deployment.NewService(deployRepo, deploymentProvider, log)
 	deployHandlers := deployment.NewHandlers(deploySvc)
 	deployWorker := deployment.NewWorker(deploySvc, "control-plane-deployment-worker", log)
 

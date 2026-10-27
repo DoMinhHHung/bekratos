@@ -1045,6 +1045,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chacha20poly1305",
  "chrono",
  "dotenvy",
@@ -1052,6 +1053,8 @@ dependencies = [
  "hmac",
  "http",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "jsonwebtoken",
  "p256",
  "password-hash",
@@ -1059,6 +1062,7 @@ dependencies = [
  "rand_core",
  "redis",
  "regex",
+ "rustls",
  "serde",
  "serde_json",
  "sha2",
@@ -1066,6 +1070,7 @@ dependencies = [
  "subtle",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http",
  "tracing",
@@ -1074,6 +1079,7 @@ dependencies = [
  "utoipa-swagger-ui",
  "uuid",
  "validator",
+ "webpki-roots 1.0.11"
 ]
 
 [[package]]

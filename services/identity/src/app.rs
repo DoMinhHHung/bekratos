@@ -25,6 +25,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/readyz", get(readyz))
         .merge(crate::openapi::swagger_ui())
         .merge(auth::routes::router())
+        .merge(crate::modules::internal::router())
         .merge(user::routes::router())
         .merge(jwks::routes::router())
         .layer(TraceLayer::new_for_http())

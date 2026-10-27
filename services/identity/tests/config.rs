@@ -11,6 +11,7 @@ const REQUIRED_ENV: &[(&str, &str)] = &[
     ("MAGIC_LINK_HMAC_KEYS", "test-key:0123456789abcdef"),
     ("MAGIC_LINK_ACTIVE_KID", "test-key"),
     ("APP_PUBLIC_BASE_URL", "https://identity.example.test"),
+    ("APP_ENV", "test"),
     ("JWT_ISSUER", "https://identity.example.test"),
     ("JWT_AUDIENCE", "identity-api"),
     (
@@ -82,6 +83,7 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
             assert_eq!(config.redis_url, REQUIRED_ENV[1].1);
             assert_eq!(config.magic_link_hmac_keys, REQUIRED_ENV[2].1);
             assert_eq!(config.magic_link_active_kid, "test-key");
+            assert_eq!(config.app_env, "test");
             assert_eq!(config.app_public_base_url, "https://identity.example.test");
             assert_eq!(config.jwt_issuer, "https://identity.example.test");
             assert_eq!(config.jwt_audience, "identity-api");
@@ -92,6 +94,10 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
             assert!(config.readiness_require_redis);
             assert_eq!(config.mail_provider, "console");
             assert_eq!(config.mail_from, "noreply@localhost");
+            assert_eq!(config.mail_api_key, "");
+            assert_eq!(config.mail_api_base_url, "https://api.resend.com");
+            assert_eq!(config.mail_timeout_secs, 10);
+            assert!(config.identity_service_api_token.is_none());
             assert_eq!(config.argon2_memory_kib, 19_456);
             assert_eq!(config.argon2_iterations, 2);
             assert_eq!(config.argon2_parallelism, 1);
@@ -107,9 +113,32 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
 }
 
 #[test]
+fn production_rejects_simulated_email_delivery() {
+    isolated("production_rejects_simulated_email_delivery", || {
+        env::set_var("APP_ENV", "production");
+        env::set_var("MAIL_PROVIDER", "console");
+        assert_config_error("production requires MAIL_PROVIDER=resend");
+        env::set_var("MAIL_PROVIDER", "none");
+        assert_config_error("production requires MAIL_PROVIDER=resend");
+        env::set_var("MAIL_PROVIDER", "resend");
+        env::set_var("MAIL_API_KEY", "synthetic-config-test-mail-key-012345");
+        env::set_var("MAIL_FROM", "noreply@example.test");
+        env::set_var("APP_PUBLIC_BASE_URL", "https://identity.example.test");
+        assert_config_error("IDENTITY_SERVICE_API_TOKEN is required in production");
+        env::set_var(
+            "IDENTITY_SERVICE_API_TOKEN",
+            "synthetic-production-service-token-012345",
+        );
+        env::set_var("APP_PUBLIC_BASE_URL", "http://identity.example.test");
+        assert_config_error("APP_PUBLIC_BASE_URL must use HTTPS");
+    });
+}
+
+#[test]
 fn explicit_settings_override_every_optional_default() {
     isolated("explicit_settings_override_every_optional_default", || {
         for (key, value) in [
+            ("APP_ENV", "development"),
             ("HOST", "127.0.0.1"),
             ("PORT", "9090"),
             ("REQUEST_TIMEOUT_SECS", "5"),
@@ -118,6 +147,9 @@ fn explicit_settings_override_every_optional_default() {
             ("READINESS_REQUIRE_REDIS", "off"),
             ("MAIL_PROVIDER", "none"),
             ("MAIL_FROM", "test@example.test"),
+            ("MAIL_API_KEY", "synthetic-resend-test-api-key"),
+            ("MAIL_API_BASE_URL", "https://api.resend.com"),
+            ("MAIL_TIMEOUT_SECS", "20"),
             ("ARGON2_MEMORY_KIB", "32768"),
             ("ARGON2_ITERATIONS", "3"),
             ("ARGON2_PARALLELISM", "2"),
@@ -132,6 +164,7 @@ fn explicit_settings_override_every_optional_default() {
             env::set_var(key, value);
         }
         let config = Config::from_env().unwrap();
+        assert_eq!(config.app_env, "development");
         assert_eq!(config.host, "127.0.0.1");
         assert_eq!(config.port, 9090);
         assert_eq!(config.bind_addr, "127.0.0.1:9090".parse().unwrap());
@@ -141,6 +174,9 @@ fn explicit_settings_override_every_optional_default() {
         assert!(!config.readiness_require_redis);
         assert_eq!(config.mail_provider, "none");
         assert_eq!(config.mail_from, "test@example.test");
+        assert_eq!(config.mail_api_key, "synthetic-resend-test-api-key");
+        assert_eq!(config.mail_api_base_url, "https://api.resend.com");
+        assert_eq!(config.mail_timeout_secs, 20);
         assert_eq!(config.argon2_memory_kib, 32_768);
         assert_eq!(config.argon2_iterations, 3);
         assert_eq!(config.argon2_parallelism, 2);

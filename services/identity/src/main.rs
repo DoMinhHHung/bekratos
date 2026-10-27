@@ -5,7 +5,7 @@ use std::time::Duration;
 use identity::infra::db;
 use identity::infra::jwt::{public_pem_from_private_pem, JwtSigner, JwtVerifier};
 use identity::infra::key_crypto::KeyEncryptor;
-use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
+use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer, ResendMailer};
 use identity::infra::password::PasswordPolicy;
 use identity::infra::redis as redis_infra;
 use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
@@ -89,6 +89,12 @@ async fn main() {
         "console" => Arc::new(ConsoleMailer {
             from: config.mail_from.clone(),
         }),
+        "resend" => Arc::new(ResendMailer::new(
+            config.mail_from.clone(),
+            config.mail_api_key.clone(),
+            config.mail_api_base_url.clone(),
+            Duration::from_secs(config.mail_timeout_secs),
+        )),
         _ => Arc::new(NoopMailer),
     };
 

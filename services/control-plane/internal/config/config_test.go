@@ -11,6 +11,12 @@ func setBaseEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://bekratos:bekratos@localhost:5432/bekratos")
 	t.Setenv("IDENTITY_JWKS_URL", "http://localhost:8080/v1/jwks")
+	t.Setenv("IDENTITY_INTROSPECTION_URL", "http://localhost:8080/internal/v1/identity/introspect")
+	t.Setenv("IDENTITY_SERVICE_API_TOKEN", "synthetic-identity-service-token-0123456789")
+	t.Setenv("RUNTIME_API_URL", "")
+	t.Setenv("RUNTIME_API_TOKEN", "")
+	t.Setenv("IDENTITY_HTTP_TIMEOUT", "")
+	t.Setenv("RUNTIME_HTTP_TIMEOUT", "")
 	t.Setenv("JWT_ISSUER", "https://identity.bekratos.local")
 	t.Setenv("JWT_AUDIENCE", "bekratos-api")
 	t.Setenv("ENV_FILE", "")
@@ -57,6 +63,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.JWKSCacheTTL != 60*time.Second {
 		t.Fatalf("jwks ttl %v", cfg.JWKSCacheTTL)
 	}
+	if cfg.IdentityHTTPTimeout != 2*time.Second || cfg.RuntimeHTTPTimeout != 25*time.Second {
+		t.Fatalf("service timeouts mismatch: identity=%v runtime=%v", cfg.IdentityHTTPTimeout, cfg.RuntimeHTTPTimeout)
+	}
+	if cfg.RuntimeAPIURL != "" || cfg.RuntimeAPIToken != "" {
+		t.Fatal("runtime adapter should be disabled by default")
+	}
 	if cfg.MaxRevocationDelay != 15*time.Minute {
 		t.Fatalf("max revocation delay %v", cfg.MaxRevocationDelay)
 	}
@@ -77,13 +89,21 @@ func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := `DATABASE_URL=postgres://fromfile@localhost/db
+IDENTITY_JWKS_URL=https://jwks.example/v1/jwks
+IDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect
+IDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789
+JWT_ISSUER=https://iss.example
+JWT_AUDIENCE=aud-example
+`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ENV_FILE", path)
 	os.Unsetenv("DATABASE_URL")
 	os.Unsetenv("IDENTITY_JWKS_URL")
+	os.Unsetenv("IDENTITY_INTROSPECTION_URL")
+	os.Unsetenv("IDENTITY_SERVICE_API_TOKEN")
 	os.Unsetenv("JWT_ISSUER")
 	os.Unsetenv("JWT_AUDIENCE")
 	cfg, err := Load()
@@ -101,13 +121,21 @@ func TestLoadENVFile(t *testing.T) {
 func TestEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := `DATABASE_URL=postgres://fromfile@localhost/db
+IDENTITY_JWKS_URL=https://jwks.example/v1/jwks
+IDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect
+IDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789
+JWT_ISSUER=https://iss.example
+JWT_AUDIENCE=aud-example
+`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ENV_FILE", path)
 	t.Setenv("DATABASE_URL", "postgres://fromenv@localhost/db")
 	t.Setenv("IDENTITY_JWKS_URL", "https://jwks.env.example/v1/jwks")
+	t.Setenv("IDENTITY_INTROSPECTION_URL", "https://identity.env.example/internal/v1/identity/introspect")
+	t.Setenv("IDENTITY_SERVICE_API_TOKEN", "synthetic-identity-service-token-env-0123456789")
 	t.Setenv("JWT_ISSUER", "https://iss.example")
 	t.Setenv("JWT_AUDIENCE", "aud-example")
 	cfg, err := Load()
@@ -126,6 +154,8 @@ func TestLoadInvalidENVFileFailsFast(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("DATABASE_URL", "postgres://x")
 	t.Setenv("IDENTITY_JWKS_URL", "https://example.com/v1/jwks")
+	t.Setenv("IDENTITY_INTROSPECTION_URL", "https://example.com/internal/v1/identity/introspect")
+	t.Setenv("IDENTITY_SERVICE_API_TOKEN", "synthetic-identity-service-token-0123456789")
 	t.Setenv("JWT_ISSUER", "iss")
 	t.Setenv("JWT_AUDIENCE", "aud")
 	_, err := Load()
@@ -151,6 +181,32 @@ func TestAcceptLoopbackHTTPJWKS(t *testing.T) {
 	t.Setenv("IDENTITY_JWKS_URL", "http://127.0.0.1:8080/v1/jwks")
 	if _, err := Load(); err != nil {
 		t.Fatalf("loopback http should be accepted: %v", err)
+	}
+}
+
+func TestRejectMissingIdentityServiceToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("IDENTITY_SERVICE_API_TOKEN", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected Identity service token to be required")
+	}
+}
+
+func TestRuntimeSettingsMustBeConfiguredTogether(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("RUNTIME_API_URL", "https://runtime.example")
+	t.Setenv("RUNTIME_API_TOKEN", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected incomplete Runtime configuration to fail")
+	}
+}
+
+func TestRejectNonLoopbackHTTPRuntimeURL(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("RUNTIME_API_URL", "http://runtime.example")
+	t.Setenv("RUNTIME_API_TOKEN", "synthetic-runtime-api-token-0123456789")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected non-loopback HTTP Runtime URL to fail")
 	}
 }
 

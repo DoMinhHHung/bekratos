@@ -15,4 +15,5 @@ var (
 	ErrProviderUnavailable  = errors.New("deployment: provider unavailable")
 	ErrStaleWorker          = errors.New("deployment: stale worker")
 	ErrReadyWithoutEvidence = errors.New("deployment: ready requires validated provider evidence")
+	ErrManifestInvalid      = errors.New("deployment: immutable configuration manifest is invalid")
 )

@@ -68,10 +68,13 @@ func requestFingerprint(mode TargetMode, versionChoice string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string) (CreateResult, error) {
+func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string, provider ProviderName) (CreateResult, error) {
 	in.IdempotencyKey = strings.TrimSpace(in.IdempotencyKey)
 	if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
 		return CreateResult{}, fmt.Errorf("%w: idempotency_key", ErrInvalidInput)
+	}
+	if provider == "" {
+		provider = ProviderUnavailable
 	}
 	mode := in.TargetMode
 	if mode == "" {
@@ -130,7 +133,7 @@ INSERT INTO deployments (
 ) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)
 ON CONFLICT (environment_id, idempotency_key) DO NOTHING
 RETURNING id`,
-		id, auth.EnvID, versionID, string(mode), string(ProviderUnavailable), string(StatusQueued),
+		id, auth.EnvID, versionID, string(mode), string(provider), string(StatusQueued),
 		in.IdempotencyKey, fp, providerReq, now, auth.ActorID, now, now,
 	).Scan(&insertedID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -157,7 +160,7 @@ RETURNING id`,
 		"deployment_id":            id.String(),
 		"configuration_version_id": versionID.String(),
 		"target_mode":              string(mode),
-		"provider":                 string(ProviderUnavailable),
+		"provider":                 string(provider),
 		"provider_request_id":      providerReq,
 	})
 	if err := r.insertAudit(ctx, tx, auth, "deployment.create", id.String(), requestID, meta, now); err != nil {
@@ -169,7 +172,7 @@ RETURNING id`,
 
 	d := Deployment{
 		ID: id, EnvironmentID: auth.EnvID, ConfigurationVersionID: versionID,
-		TargetMode: mode, Provider: ProviderUnavailable, Status: StatusQueued,
+		TargetMode: mode, Provider: provider, Status: StatusQueued,
 		MaxAttempts: 5, IdempotencyKey: in.IdempotencyKey, RequestFingerprint: fp,
 		ProviderRequestID: providerReq,
 		NextAttemptAt:     now, CreatedByUserID: auth.ActorID, CreatedAt: now, UpdatedAt: now,
@@ -221,6 +224,35 @@ SELECT EXISTS(
 		return uuid.Nil, ErrConfigMismatch
 	}
 	return *active, nil
+}
+
+type ConfigurationManifest struct {
+	FormatVersion int
+	Canonical     string
+	SHA256        string
+}
+
+func (r *Repository) LoadConfigurationManifest(ctx context.Context, envID, versionID uuid.UUID) (ConfigurationManifest, error) {
+	var manifest ConfigurationManifest
+	err := r.pool.QueryRow(ctx, `
+SELECT manifest_format_version, manifest_canonical, manifest_sha256
+FROM environment_configuration_versions
+WHERE id = $1 AND environment_id = $2
+`, versionID, envID).Scan(&manifest.FormatVersion, &manifest.Canonical, &manifest.SHA256)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConfigurationManifest{}, ErrConfigMismatch
+	}
+	if err != nil {
+		return ConfigurationManifest{}, err
+	}
+	if manifest.FormatVersion <= 0 || !json.Valid([]byte(manifest.Canonical)) {
+		return ConfigurationManifest{}, ErrManifestInvalid
+	}
+	sum := sha256.Sum256([]byte(manifest.Canonical))
+	if hex.EncodeToString(sum[:]) != manifest.SHA256 {
+		return ConfigurationManifest{}, ErrManifestInvalid
+	}
+	return manifest, nil
 }
 
 func (r *Repository) findIdempotent(ctx context.Context, tx pgx.Tx, envID uuid.UUID, key string) (Deployment, bool, error) {
