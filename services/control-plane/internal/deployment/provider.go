@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,15 +16,18 @@ type ProvisionRequest struct {
 }
 
 type ProvisionResult struct {
-	Outcome       Outcome
-	Code          string
-	Message       string
-	URL           string
-	Host          string
-	Region        string
-	RequestID     string
-	EnvironmentID uuid.UUID
-	VersionID     uuid.UUID
+	Outcome                Outcome
+	Code                   string
+	Message                string
+	URL                    string
+	Host                   string
+	Region                 string
+	RequestID              string
+	EnvironmentID          uuid.UUID
+	VersionID              uuid.UUID
+	ReadinessProbePassed   bool
+	ReadinessProbeID       string
+	ReadinessObservedAt    time.Time
 }
 
 type Outcome string
