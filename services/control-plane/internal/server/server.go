@@ -12,6 +12,7 @@ import (
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/module"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/project"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/schema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,12 +35,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	moduleSvc := module.NewService(moduleRepo)
 	moduleHandlers := module.NewHandlers(moduleSvc)
 
+	schemaRepo := schema.NewRepository(pool)
+	schemaSvc := schema.NewService(schemaRepo, orgRepo, projectRepo)
+	schemaHandlers := schema.NewHandlers(schemaSvc)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
 	mux.HandleFunc("/readyz", h.Readyz)
 	orgHandlers.Register(mux, authMW)
 	projectHandlers.Register(mux, authMW)
 	moduleHandlers.Register(mux, authMW)
+	schemaHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)
