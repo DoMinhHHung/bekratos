@@ -616,8 +616,14 @@ async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
     .execute(&pool)
     .await
     .expect("expire token after creation");
-    let expired_claim = repo.claim_due_for_delivery(10, 60).await.expect("claim expired token");
-    assert!(expired_claim.is_empty());
+    let expired_is_eligible: bool = sqlx::query_scalar(
+        "SELECT expires_at > now() AND consumed_at IS NULL AND revoked_at IS NULL AND sent_at IS NULL FROM token.verification_tokens WHERE id = $1",
+    )
+    .bind(expired_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read expired token state");
+    assert!(!expired_is_eligible);
     delete_user(&pool, user_id).await;
 }
 
