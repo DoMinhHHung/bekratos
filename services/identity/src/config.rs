@@ -20,6 +20,10 @@ pub struct Config {
     pub app_public_base_url: String,
     pub mail_provider: String,
     pub mail_from: String,
+    pub mail_api_key: String,
+    pub mail_api_base_url: String,
+    pub mail_timeout_secs: u64,
+    pub identity_service_api_token: Option<String>,
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
@@ -52,6 +56,10 @@ impl std::fmt::Debug for Config {
             .field("app_public_base_url", &self.app_public_base_url)
             .field("mail_provider", &self.mail_provider)
             .field("mail_from", &self.mail_from)
+            .field("mail_api_key", &"[REDACTED]")
+            .field("mail_api_base_url", &self.mail_api_base_url)
+            .field("mail_timeout_secs", &self.mail_timeout_secs)
+            .field("identity_service_api_token", &self.identity_service_api_token.as_ref().map(|_| "[REDACTED]"))
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -137,8 +145,43 @@ impl Config {
         if app_public_base_url.is_empty() {
             return Err(AppError::config("APP_PUBLIC_BASE_URL must not be empty"));
         }
-        let mail_provider = env::var("MAIL_PROVIDER").unwrap_or_else(|_| "console".to_string());
+        let mail_provider = env::var("MAIL_PROVIDER")
+            .unwrap_or_else(|_| "console".to_string())
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(mail_provider.as_str(), "console" | "none" | "resend") {
+            return Err(AppError::config("MAIL_PROVIDER must be console, none, or resend"));
+        }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
+        let mail_api_key = env::var("MAIL_API_KEY").unwrap_or_default();
+        let mail_api_base_url =
+            env::var("MAIL_API_BASE_URL").unwrap_or_else(|_| "https://api.resend.com".to_string());
+        let mail_timeout_secs: u64 = env::var("MAIL_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .map_err(|_| AppError::config("MAIL_TIMEOUT_SECS must be a valid u64"))?;
+        if mail_timeout_secs == 0 || mail_timeout_secs > 120 {
+            return Err(AppError::config("MAIL_TIMEOUT_SECS must be between 1 and 120"));
+        }
+        if mail_provider == "resend" {
+            if mail_api_key.trim().len() < 16 || mail_api_key.contains("change-me") {
+                return Err(AppError::config("MAIL_API_KEY is required for MAIL_PROVIDER=resend"));
+            }
+            if !mail_from.contains('@') || mail_from.chars().any(char::is_whitespace) {
+                return Err(AppError::config("MAIL_FROM must be a valid email address for Resend"));
+            }
+            validate_http_url(&mail_api_base_url, "MAIL_API_BASE_URL", true)?;
+        }
+        let identity_service_api_token = env::var("IDENTITY_SERVICE_API_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty());
+        if let Some(token) = identity_service_api_token.as_ref() {
+            if token.len() < 32 || token.contains("change-me") {
+                return Err(AppError::config(
+                    "IDENTITY_SERVICE_API_TOKEN must contain at least 32 non-placeholder characters",
+                ));
+            }
+        }
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
             .unwrap_or_else(|_| "19456".to_string())
@@ -212,6 +255,10 @@ impl Config {
             app_public_base_url,
             mail_provider,
             mail_from,
+            mail_api_key,
+            mail_api_base_url,
+            mail_timeout_secs,
+            identity_service_api_token,
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
@@ -239,5 +286,26 @@ fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
             ))),
         },
         Err(_) => Ok(default),
+    }
+}
+
+
+fn validate_http_url(raw: &str, name: &str, allow_loopback_http: bool) -> AppResult<()> {
+    let uri: http::Uri = raw
+        .parse()
+        .map_err(|_| AppError::config(format!("{name} must be an absolute HTTP(S) URL")))?;
+    let scheme = uri.scheme_str().unwrap_or_default();
+    let Some(host) = uri.host() else {
+        return Err(AppError::config(format!("{name} must be an absolute HTTP(S) URL")));
+    };
+    let authority = uri.authority().map(|value| value.as_str()).unwrap_or_default();
+    if authority.contains('@') || uri.query().is_some() || uri.fragment().is_some() {
+        return Err(AppError::config(format!("{name} must not contain userinfo, query, or fragment")));
+    }
+    let loopback = matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1");
+    match scheme {
+        "https" => Ok(()),
+        "http" if allow_loopback_http && loopback => Ok(()),
+        _ => Err(AppError::config(format!("{name} must use HTTPS except for loopback hosts"))),
     }
 }
