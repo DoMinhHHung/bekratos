@@ -29,14 +29,14 @@ func TestIdentityClientIntrospectSendsServiceCredentialAndAccessToken(t *testing
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(IdentityIntrospection{
-			Active              : undefined,
-			UserID              : undefined,
-			SessionID           : undefined,
-			Issuer              : undefined,
-			Audience            : undefined,
-			ExpiresAt           : undefined,
-			EmailVerified       : undefined,
-			VerifiedPrimaryEmail: undefined,
+			Active              : true,
+			UserID              : "00000000-0000-7000-8000-000000000001",
+			SessionID           : "00000000-0000-7000-8000-000000000002",
+			Issuer              : "https://identity.example.test",
+			Audience            : "bekratos-api",
+			ExpiresAt           : time.Now().Add(time.Minute).Unix(),
+			EmailVerified       : true,
+			VerifiedPrimaryEmail: ptr("user@example.test"),
 		})
 	}))
 	defer server.Close()
