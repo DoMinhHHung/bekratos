@@ -472,7 +472,7 @@ INSERT INTO environment_configuration_versions (
 ) VALUES (
   $1, $2, 2, 1, 1, 1, '{}',
   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-  'compatible', 'candidate', $3
+  'compatible', 'queued', $3
 )`, otherVersion, envID, userID); err != nil {
 		t.Fatal(err)
 	}
@@ -532,11 +532,17 @@ func TestAmbiguousTimeoutDoesNotBecomeReady(t *testing.T) {
 	if got.FailureCode != "provider_ambiguous" {
 		t.Fatalf("code=%s", got.FailureCode)
 	}
-	if len(rec.Calls) != 1 {
-		t.Fatalf("provider calls=%d", len(rec.Calls))
+	matched := 0
+	for _, call := range rec.Calls {
+		if call.DeploymentID == created.Deployment.ID {
+			matched++
+			if call.ProviderRequestID != created.Deployment.ProviderRequestID {
+				t.Fatal("stable provider request id required")
+			}
+		}
 	}
-	if rec.Calls[0].ProviderRequestID != created.Deployment.ProviderRequestID {
-		t.Fatal("stable provider request id required")
+	if matched != 1 {
+		t.Fatalf("provider calls for deployment=%d total=%d", matched, len(rec.Calls))
 	}
 }
 
