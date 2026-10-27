@@ -70,14 +70,9 @@ Identity có adapter gửi email qua Resend (`MAIL_PROVIDER=resend`) bằng HTTP
 
 Control Plane dùng Identity để xác thực người đăng nhập Dashboard; project end-users là danh tính khác, thuộc Auth module của runtime theo từng project/environment.
 
-Trong source Identity được kiểm tra ngày 2026-10-26:
+Identity cung cấp private endpoint `POST /internal/v1/identity/introspect`. Request body là `{"access_token":"<platform-access-jwt>"}`; caller phải gửi `X-Identity-Service-Token`. Response trả `active`, `user_id`, `session_id`, `issuer`, `audience`, `expires_at`, `email_verified` và `verified_primary_email`. Endpoint kiểm tra chữ ký/claims ES256, rồi đọc session/account/primary verified email từ PostgreSQL. Response có `Cache-Control: no-store`; lỗi DB/config trả lỗi dịch vụ thay vì suy đoán session còn hợp lệ.
 
-- Access JWT có các claim cơ bản `sub`, `sid`, `iss`, `aud`, `iat`, `nbf`, `exp`.
-- JWKS route là `GET /v1/jwks`.
-- Chưa thấy route chuyên dụng cho service khác kiểm tra trạng thái session còn hiệu lực.
-- Không nên giả định JWT hiện chứa verified primary email.
-
-Để bật contract, đặt cùng secret random tối thiểu 32 ký tự vào `IDENTITY_SERVICE_API_TOKEN` ở Identity và Control Plane. Control Plane kiểm tra cả JWT/JWKS lẫn introspection; 503 từ Identity làm request quản trị fail-closed. Không tin `X-User-ID`, email hoặc role do caller tự truyền. Endpoint hiện dùng shared-secret header; production nên giới hạn network/mTLS và quản lý secret bằng secret manager. Introspection kiểm tra session tức thời trong DB nên không phụ thuộc deny-list JWT ở Control Plane.
+Để bật contract, đặt cùng secret random tối thiểu 32 ký tự vào `IDENTITY_SERVICE_API_TOKEN` ở Identity và Control Plane. Control Plane kiểm tra JWT/JWKS và gọi introspection cho mỗi request quản trị; 401 làm request bị từ chối, lỗi Identity/network làm request fail-closed với 503. Không tin `X-User-ID`, email hoặc role do caller tự truyền. Endpoint hiện dùng shared-secret header; production cần giới hạn network, ưu tiên mTLS/service identity và quản lý secret bằng secret manager. Không cache kết quả introspection nếu cần thu hồi session tức thời.
 
 ## Chạy local
 
