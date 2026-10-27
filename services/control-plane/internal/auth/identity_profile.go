@@ -15,7 +15,7 @@ const maxIdentityProfileBytes = 16 * 1024
 
 var (
 	ErrIdentityUnauthorized = errors.New("identity rejected the session")
-	ErrIdentityUnavailable = errors.New("identity session verification unavailable")
+	ErrIdentityUnavailable  = errors.New("identity session verification unavailable")
 )
 
 type IdentityProfileVerifier struct {
@@ -34,7 +34,7 @@ func NewIdentityProfileVerifier(url string, timeout time.Duration) *IdentityProf
 		timeout = 3 * time.Second
 	}
 	return &IdentityProfileVerifier{
-		url: url,
+		url   : url,
 		client: &http.Client{
 			Timeout: timeout,
 		},
