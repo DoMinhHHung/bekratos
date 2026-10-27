@@ -12,6 +12,7 @@ import (
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/configversion"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/deployment"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/module"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/project"
@@ -20,12 +21,13 @@ import (
 )
 
 type Server struct {
-	httpServer *http.Server
-	log        *slog.Logger
-	worker     *configversion.Worker
-	workerCtx  context.Context
-	workerStop context.CancelFunc
-	startOnce  sync.Once
+	httpServer   *http.Server
+	log          *slog.Logger
+	applyWorker  *configversion.Worker
+	deployWorker *deployment.Worker
+	workerCtx    context.Context
+	workerStop   context.CancelFunc
+	startOnce    sync.Once
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.Middleware) *Server {
@@ -49,11 +51,16 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	configVersionRepo := configversion.NewRepository(pool)
 	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter(), log)
 	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
-	worker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
+	applyWorker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
 
 	apiKeyRepo := apikey.NewRepository(pool)
 	apiKeySvc := apikey.NewService(apiKeyRepo, orgRepo)
 	apiKeyHandlers := apikey.NewHandlers(apiKeySvc)
+
+	deployRepo := deployment.NewRepository(pool)
+	deploySvc := deployment.NewService(deployRepo, deployment.NewUnavailableProvider(), log)
+	deployHandlers := deployment.NewHandlers(deploySvc)
+	deployWorker := deployment.NewWorker(deploySvc, "control-plane-deployment-worker", log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
@@ -64,6 +71,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	schemaHandlers.Register(mux, authMW)
 	configVersionHandlers.Register(mux, authMW)
 	apiKeyHandlers.Register(mux, authMW)
+	deployHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)
@@ -81,16 +89,18 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 			WriteTimeout: cfg.WriteTimeout,
 			IdleTimeout:  cfg.IdleTimeout,
 		},
-		log:        log,
-		worker:     worker,
-		workerCtx:  workerCtx,
-		workerStop: workerStop,
+		log:          log,
+		applyWorker:  applyWorker,
+		deployWorker: deployWorker,
+		workerCtx:    workerCtx,
+		workerStop:   workerStop,
 	}
 }
 
 func (s *Server) Start() error {
 	s.startOnce.Do(func() {
-		s.worker.Start(s.workerCtx)
+		s.applyWorker.Start(s.workerCtx)
+		s.deployWorker.Start(s.workerCtx)
 	})
 	s.log.Info("server starting", "addr", s.httpServer.Addr)
 	err := s.httpServer.ListenAndServe()
@@ -102,7 +112,8 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.workerStop()
-	s.worker.Stop()
+	s.applyWorker.Stop()
+	s.deployWorker.Stop()
 	return s.httpServer.Shutdown(ctx)
 }
 
