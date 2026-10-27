@@ -713,7 +713,7 @@ func TestClaimScansNullableReadinessEvidence(t *testing.T) {
 }
 
 func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
-	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		DeploymentID:         uuid.Must(uuid.NewV7()),
@@ -725,6 +725,7 @@ func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 		Host:                 "runtime.example.test",
 		URL:                  "https://runtime.example.test",
 	}}
+	svc = NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "wrong-deployment-evidence-" + uuid.NewString(),
 	})
@@ -747,7 +748,7 @@ func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 }
 
 func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
-	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		EnvironmentID:        envID,
@@ -758,6 +759,7 @@ func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 		Host:                 "evil.example",
 		URL:                  "https://runtime.example.test",
 	}}
+	svc = NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "mismatched-target-" + uuid.NewString(),
 	})
@@ -777,7 +779,7 @@ func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 }
 
 func TestReadyRejectsNonHTTPSURL(t *testing.T) {
-	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		EnvironmentID:        envID,
@@ -788,6 +790,7 @@ func TestReadyRejectsNonHTTPSURL(t *testing.T) {
 		Host:                 "runtime.example.test",
 		URL:                  "http://runtime.example.test",
 	}}
+	svc = NewService(NewRepository(pool), rec, nil)
 	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
 		IdempotencyKey: "non-https-target-" + uuid.NewString(),
 	})
