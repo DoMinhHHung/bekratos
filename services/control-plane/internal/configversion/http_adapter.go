@@ -50,14 +50,14 @@ func (a *HTTPApplyAdapter) Apply(ctx context.Context, req ApplyRequest) (ApplyRe
 		return ApplyResult{}, AmbiguousApplyError{}
 	}
 	body := runtimeApplyRequest{
-		ContractVersion        : undefined,
-		EnvironmentID          : undefined,
-		ConfigurationVersionID : undefined,
-		ManifestFormatVersion  : undefined,
-		ManifestSHA256         : undefined,
-		Manifest               : undefined,
-		ApplyRequestID         : undefined,
-		ExpectedActiveVersionID: undefined,
+		ContractVersion        : "v1",
+		EnvironmentID          : req.EnvironmentID,
+		ConfigurationVersionID : req.VersionID,
+		ManifestFormatVersion  : req.ManifestFormatVersion,
+		ManifestSHA256         : req.ManifestSHA256,
+		Manifest               : json.RawMessage(req.ManifestCanonical),
+		ApplyRequestID         : req.ApplyRequestID,
+		ExpectedActiveVersionID: req.ExpectedActiveVersionID,
 	}
 	status, responseBody, err := a.client.Post(ctx, "/v1/internal/configuration/apply", req.ApplyRequestID, body)
 	if err != nil || status == http.StatusRequestTimeout || status >= 500 ||
@@ -66,15 +66,15 @@ func (a *HTTPApplyAdapter) Apply(ctx context.Context, req ApplyRequest) (ApplyRe
 	}
 	if status == http.StatusTooManyRequests {
 		return ApplyResult{}, RetryableApplyError{
-			Code   : undefined,
-			Message: undefined,
+			Code   : "runtime_busy",
+			Message: "runtime rejected apply before accepting an operation",
 		}
 	}
 	if status < 200 || status >= 300 {
 		return ApplyResult{
-			Accepted: undefined,
-			Code    : undefined,
-			Message : undefined,
+			Accepted: false,
+			Code    : "runtime_rejected",
+			Message : "runtime rejected configuration apply",
 		}, nil
 	}
 
@@ -83,13 +83,13 @@ func (a *HTTPApplyAdapter) Apply(ctx context.Context, req ApplyRequest) (ApplyRe
 		return ApplyResult{}, AmbiguousApplyError{}
 	}
 	return ApplyResult{
-		Accepted               : undefined,
-		AppliedVersion         : undefined,
-		AppliedSHA256          : undefined,
-		EnvironmentID          : undefined,
-		ExpectedActiveVersionID: undefined,
-		Code                   : undefined,
-		Message                : undefined,
-		NeedsReconciliation    : undefined,
+		Accepted               : decoded.Accepted,
+		AppliedVersion         : decoded.AppliedVersion,
+		AppliedSHA256          : decoded.AppliedSHA256,
+		EnvironmentID          : decoded.EnvironmentID,
+		ExpectedActiveVersionID: decoded.ExpectedActiveVersionID,
+		Code                   : decoded.Code,
+		Message                : "runtime configuration apply response",
+		NeedsReconciliation    : decoded.NeedsReconciliation,
 	}, nil
 }
