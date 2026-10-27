@@ -213,6 +213,32 @@ impl<'a> TokenRepo<'a> {
         })
     }
 
+    pub async fn mark_delivery_permanent_failure(
+        &self,
+        id: Uuid,
+        error_code: &str,
+    ) -> AppResult<()> {
+        sqlx::query(
+            r#"
+            UPDATE token.verification_tokens
+            SET lease_until = NULL,
+                last_delivery_error_code = $2,
+                next_attempt_at = expires_at
+            WHERE id = $1
+              AND sent_at IS NULL
+            "#,
+        )
+        .bind(id)
+        .bind(error_code)
+        .execute(self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(%id, "mark delivery permanently failed");
+            AppError::Internal
+        })?;
+        Ok(())
+    }
+
     /// Đánh dấu token đã gửi, xóa lease, lịch thử lại và mã lỗi gửi trước đó.
     ///
     /// Không có token vẫn thành công; lỗi database trả `Internal`.
