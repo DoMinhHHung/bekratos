@@ -589,13 +589,12 @@ async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
         .fetch_one(&pool)
         .await
         .expect("read terminal token state");
-    let expires_at: chrono::DateTime<Utc> = sqlx::query_scalar(
-        "SELECT expires_at FROM token.verification_tokens WHERE id = $1",
-    )
-    .bind(permanent_id)
-    .fetch_one(&pool)
-    .await
-    .expect("read token expiry");
+    let expires_at: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT expires_at FROM token.verification_tokens WHERE id = $1")
+            .bind(permanent_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read token expiry");
     assert_eq!(retry_after_expiry, expires_at);
     assert!(is_scheduled_after_expiry);
 
@@ -636,8 +635,14 @@ async fn email_queue_state_updates_fail_when_token_row_is_missing() {
     let repo = TokenRepo::new(&pool);
     let missing_id = Uuid::now_v7();
     assert!(repo.mark_sent(missing_id).await.is_err());
-    assert!(repo.mark_delivery_failure(missing_id, "send_failed", 30).await.is_err());
-    assert!(repo.mark_delivery_permanent_failure(missing_id, "max_attempts").await.is_err());
+    assert!(repo
+        .mark_delivery_failure(missing_id, "send_failed", 30)
+        .await
+        .is_err());
+    assert!(repo
+        .mark_delivery_permanent_failure(missing_id, "max_attempts")
+        .await
+        .is_err());
 }
 
 #[tokio::test]
