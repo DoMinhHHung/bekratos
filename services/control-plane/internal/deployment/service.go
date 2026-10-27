@@ -46,16 +46,37 @@ func (s *Service) Get(ctx context.Context, principal auth.Principal, orgID, proj
 }
 
 func (s *Service) ProcessOnce(ctx context.Context, workerID string, lease time.Duration, batch int) (int, error) {
-	claimed, err := s.repo.Claim(ctx, workerID, lease, batch)
-	if err != nil {
-		return 0, err
+	if batch <= 0 {
+		batch = 1
 	}
-	for _, d := range claimed {
-		if err := s.processOne(ctx, workerID, d); err != nil {
-			s.log.Warn("deployment process failed", "deployment_id", d.ID.String(), "error", err.Error())
+	if lease <= 0 {
+		return 0, ErrInvalidInput
+	}
+	processed := 0
+	for processed < batch {
+		claimed, err := s.repo.Claim(ctx, workerID, lease, 1)
+		if err != nil {
+			return processed, err
 		}
+		if len(claimed) == 0 {
+			break
+		}
+		d := claimed[0]
+		providerTimeout := lease - 3*time.Second
+		if providerTimeout <= 0 {
+			providerTimeout = lease / 2
+		}
+		if providerTimeout <= 0 {
+			providerTimeout = time.Millisecond
+		}
+		providerCtx, cancel := context.WithTimeout(ctx, providerTimeout)
+		if err := s.processOne(providerCtx, workerID, d); err != nil {
+			s.log.Warn("deployment process failed", "deployment_id", d.ID.String(), "error_category", "outcome_persistence_or_validation_failed")
+		}
+		cancel()
+		processed++
 	}
-	return len(claimed), nil
+	return processed, nil
 }
 
 func (s *Service) processOne(ctx context.Context, workerID string, d Deployment) error {
@@ -66,31 +87,38 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 		ProviderRequestID:      d.ProviderRequestID,
 		TargetMode:             d.TargetMode,
 	}
-	res, err := s.provider.Provision(ctx, req)
-	if err != nil && !errors.Is(err, ErrProviderUnavailable) {
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return s.repo.MarkFailed(ctx, d, workerID, "provider_ambiguous", "provider call timed out; reconciliation required", true)
-		}
-		return s.repo.MarkFailed(ctx, d, workerID, "provider_error", "provider call failed", false)
+	res, providerErr := s.provider.Provision(ctx, req)
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+
+	if ctx.Err() != nil || errors.Is(providerErr, context.DeadlineExceeded) || errors.Is(providerErr, context.Canceled) {
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
 	}
+	if errors.Is(providerErr, ErrProviderUnavailable) {
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_unavailable", "deployment provider is unavailable", true)
+	}
+	if providerErr != nil {
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_error", "deployment provider request failed", false)
+	}
+
 	switch res.Outcome {
 	case OutcomeSuccess:
-		if err := s.repo.MarkReady(ctx, d, workerID, res); err != nil {
+		if err := s.repo.MarkReady(persistCtx, d, workerID, res); err != nil {
 			if errors.Is(err, ErrStaleWorker) {
 				return err
 			}
-			return s.repo.MarkFailed(ctx, d, workerID, "invalid_provider_evidence", "provider evidence rejected", true)
+			return s.repo.MarkFailed(persistCtx, d, workerID, "invalid_provider_evidence", "deployment provider returned invalid readiness evidence", true)
 		}
 		return nil
 	case OutcomeUnavailable:
-		return s.repo.MarkFailed(ctx, d, workerID, res.Code, res.Message, true)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_unavailable", "deployment provider is unavailable", true)
 	case OutcomeFailure:
-		return s.repo.MarkFailed(ctx, d, workerID, res.Code, res.Message, true)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_failure", "deployment provider failed", true)
 	case OutcomeRetryable:
-		return s.repo.MarkFailed(ctx, d, workerID, res.Code, res.Message, false)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_retryable", "deployment provider reported a retryable failure", false)
 	case OutcomeAmbiguous:
-		return s.repo.MarkFailed(ctx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
 	default:
-		return s.repo.MarkFailed(ctx, d, workerID, "provider_unknown", "unknown provider outcome", true)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_unknown", "deployment provider returned an unsupported outcome", true)
 	}
 }
