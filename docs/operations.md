@@ -53,3 +53,12 @@ SQLX_OFFLINE=true cargo test --locked --all-targets
 ```
 
 Integration tests skip when their corresponding test service URL is absent. CI supplies disposable PostgreSQL and Redis services, so those checks run there.
+
+
+## Production email delivery
+
+Identity supports the Resend HTTPS API for outbound verification, password-reset, and account-restore messages. Set `APP_ENV=production`, `MAIL_PROVIDER=resend`, `MAIL_FROM` to a sender verified by the provider, `MAIL_API_KEY` through the deployment secret manager, and `MAIL_TIMEOUT_SECS` to a value from 1 to 60. Production startup rejects the console/no-op providers and requires `APP_PUBLIC_BASE_URL` to use HTTPS. Never commit provider credentials or place them in logs.
+
+The provider call uses TLS certificate validation, a fixed provider hostname, a bounded request timeout, and a bounded response body. A successful response means the provider accepted the message; it does not prove inbox delivery. The durable PostgreSQL token queue retries provider failures. Configure SPF and DKIM with the mail provider and publish a DMARC policy for the sending domain. Monitor queue age, delivery attempts, provider rejection rates, and expired verification/reset tokens. Rotate the provider key through the secret manager and revoke the previous key after validating the replacement.
+
+The development console provider is not a delivery mechanism. Use it only for local development or tests; it logs message metadata and does not send email.
