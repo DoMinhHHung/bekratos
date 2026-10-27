@@ -34,7 +34,7 @@ func NewIdentityProfileVerifier(url string, timeout time.Duration) *IdentityProf
 		timeout = 3 * time.Second
 	}
 	return &IdentityProfileVerifier{
-		url:    url,
+		url: url,
 		client: &http.Client{
 			Timeout: timeout,
 		},
