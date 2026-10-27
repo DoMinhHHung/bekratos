@@ -56,8 +56,7 @@ impl ResendMailer {
         let tcp = TcpStream::connect((RESEND_HOST, 443))
             .await
             .map_err(|_| AppError::Unavailable)?;
-        let server_name =
-            ServerName::try_from(RESEND_HOST).map_err(|_| AppError::Unavailable)?;
+        let server_name = ServerName::try_from(RESEND_HOST).map_err(|_| AppError::Unavailable)?;
         let tls = TlsConnector::from(self.tls_config.clone())
             .connect(server_name, tcp)
             .await
