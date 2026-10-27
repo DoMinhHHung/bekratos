@@ -27,6 +27,7 @@ pub struct Config {
     pub smtp_port: u16,
     pub smtp_username: String,
     pub smtp_app_password: String,
+    pub control_plane_service_token: String,
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
@@ -66,6 +67,7 @@ impl std::fmt::Debug for Config {
             .field("smtp_port", &self.smtp_port)
             .field("smtp_username", &"[REDACTED]")
             .field("smtp_app_password", &"[REDACTED]")
+            .field("control_plane_service_token", &"[REDACTED]")
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -190,6 +192,8 @@ impl Config {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect::<String>();
+        let control_plane_service_token =
+            env::var("CONTROL_PLANE_SERVICE_TOKEN").unwrap_or_default();
         if mail_provider == "resend" && mail_api_key.trim().is_empty() {
             return Err(AppError::config(
                 "MAIL_API_KEY is required when MAIL_PROVIDER=resend",
@@ -210,6 +214,14 @@ impl Config {
             if smtp_username.contains('\r') || smtp_username.contains('\n') || smtp_app_password.contains('\r') || smtp_app_password.contains('\n') {
                 return Err(AppError::config("SMTP credentials contain invalid characters"));
             }
+        }
+        if app_env == "production"
+            && (control_plane_service_token.len() < 32
+                || control_plane_service_token.contains("local-dev-only"))
+        {
+            return Err(AppError::config(
+                "production requires a non-placeholder CONTROL_PLANE_SERVICE_TOKEN of at least 32 characters",
+            ));
         }
         if app_env == "production" && !matches!(mail_provider.as_str(), "resend" | "smtp") {
             return Err(AppError::config("production requires MAIL_PROVIDER=resend or smtp"));
@@ -299,6 +311,7 @@ impl Config {
             smtp_port,
             smtp_username,
             smtp_app_password,
+            control_plane_service_token,
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
