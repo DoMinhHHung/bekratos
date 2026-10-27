@@ -218,7 +218,7 @@ impl<'a> TokenRepo<'a> {
         id: Uuid,
         error_code: &str,
     ) -> AppResult<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE token.verification_tokens
             SET lease_until = NULL,
@@ -236,14 +236,15 @@ impl<'a> TokenRepo<'a> {
             tracing::error!(%id, "mark delivery permanently failed");
             AppError::Internal
         })?;
+        if result.rows_affected() != 1 {
+            tracing::error!(%id, "mark permanent delivery failure affected unexpected row count");
+            return Err(AppError::Internal);
+        }
         Ok(())
     }
 
-    /// Đánh dấu token đã gửi, xóa lease, lịch thử lại và mã lỗi gửi trước đó.
-    ///
-    /// Không có token vẫn thành công; lỗi database trả `Internal`.
     pub async fn mark_sent(&self, id: Uuid) -> AppResult<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE token.verification_tokens
             SET sent_at = now(),
@@ -251,6 +252,7 @@ impl<'a> TokenRepo<'a> {
                 last_delivery_error_code = NULL,
                 next_attempt_at = NULL
             WHERE id = $1
+              AND sent_at IS NULL
             "#,
         )
         .bind(id)
@@ -260,25 +262,30 @@ impl<'a> TokenRepo<'a> {
             tracing::error!(error = %e, %id, "mark token sent failed");
             AppError::Internal
         })?;
+        if result.rows_affected() != 1 {
+            tracing::error!(%id, "mark token sent affected unexpected row count");
+            return Err(AppError::Internal);
+        }
         Ok(())
     }
 
-    /// Lưu mã lỗi gửi, giải phóng lease và hẹn thử lại sau `backoff_secs` giây.
-    ///
-    /// Không có token vẫn thành công; lỗi database trả `Internal`.
     pub async fn mark_delivery_failure(
         &self,
         id: Uuid,
         error_code: &str,
         backoff_secs: i64,
     ) -> AppResult<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             UPDATE token.verification_tokens
             SET lease_until = NULL,
                 last_delivery_error_code = $2,
                 next_attempt_at = now() + make_interval(secs => $3::double precision)
             WHERE id = $1
+              AND sent_at IS NULL
+              AND consumed_at IS NULL
+              AND revoked_at IS NULL
+              AND expires_at > now()
             "#,
         )
         .bind(id)
@@ -290,6 +297,10 @@ impl<'a> TokenRepo<'a> {
             tracing::error!(error = %e, %id, "mark delivery failure failed");
             AppError::Internal
         })?;
+        if result.rows_affected() != 1 {
+            tracing::error!(%id, "mark delivery failure affected unexpected row count");
+            return Err(AppError::Internal);
+        }
         Ok(())
     }
 }
