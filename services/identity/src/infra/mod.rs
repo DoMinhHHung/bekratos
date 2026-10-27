@@ -4,5 +4,6 @@ pub mod key_crypto;
 pub mod mailer;
 pub mod password;
 pub mod redis;
+pub mod resend;
 pub mod refresh_token;
 pub mod tokens;
