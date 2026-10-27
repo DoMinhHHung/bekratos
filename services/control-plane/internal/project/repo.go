@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,12 +27,31 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-func (r *Repository) CreateProjectWithDevEnv(ctx context.Context, p Project, env Environment) error {
+func (r *Repository) CreateProjectWithDevEnv(ctx context.Context, p Project, env Environment, actorUserID uuid.UUID, requestID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	var orgStatus string
+	var role string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, p.OrganizationID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return ErrNotFound
+	}
+	if orgStatus != "active" {
+		return ErrForbidden
+	}
+	if !roleAllows(role, org.Role.CanCreateProject) {
+		return ErrForbidden
+	}
 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO projects (
@@ -58,6 +78,12 @@ func (r *Repository) CreateProjectWithDevEnv(ctx context.Context, p Project, env
 		if isUniqueViolation(err) {
 			return ErrConflict
 		}
+		return err
+	}
+	if err := insertProjectAudit(ctx, tx, actorUserID, p.OrganizationID, "project.created", "project", p.ID.String(), requestID, nil); err != nil {
+		return err
+	}
+	if err := insertProjectAudit(ctx, tx, actorUserID, p.OrganizationID, "environment.created", "environment", env.ID.String(), requestID, nil); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
@@ -101,12 +127,36 @@ func (r *Repository) GetProject(ctx context.Context, orgID, projectID uuid.UUID)
 	return p, nil
 }
 
-func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID uuid.UUID, displayName, description *string) (Project, error) {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE projects SET
-			display_name = COALESCE($3, display_name),
-			description = COALESCE($4, description),
-			updated_at = now()
+func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID, actorUserID uuid.UUID, requestID string, displayName, description *string) (Project, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var orgStatus, role string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return Project{}, ErrNotFound
+	}
+	if orgStatus != "active" {
+		return Project{}, ErrForbidden
+	}
+	if !roleAllows(role, org.Role.CanUpdateProject) {
+		return Project{}, ErrForbidden
+	}
+
+	tag, err := tx.Exec(ctx, `
+		UPDATE projects
+		SET display_name = COALESCE($3, display_name),
+		    description = COALESCE($4, description),
+		    updated_at = now()
 		WHERE id = $1 AND organization_id = $2 AND status = 'active'`,
 		projectID, orgID, displayName, description,
 	)
@@ -116,11 +166,39 @@ func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID uuid.UU
 	if tag.RowsAffected() == 0 {
 		return Project{}, ErrNotFound
 	}
+	if err := insertProjectAudit(ctx, tx, actorUserID, orgID, "project.updated", "project", projectID.String(), requestID, nil); err != nil {
+		return Project{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Project{}, err
+	}
 	return r.GetProject(ctx, orgID, projectID)
 }
 
-func (r *Repository) ArchiveProject(ctx context.Context, orgID, projectID uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `
+func (r *Repository) ArchiveProject(ctx context.Context, orgID, projectID, actorUserID uuid.UUID, requestID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var orgStatus, role string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return ErrNotFound
+	}
+	if orgStatus != "active" {
+		return ErrForbidden
+	}
+	if !roleAllows(role, org.Role.CanArchiveProject) {
+		return ErrForbidden
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE projects
 		SET status = 'archived', archived_at = now(), updated_at = now()
 		WHERE id = $1 AND organization_id = $2 AND status = 'active'`,
@@ -132,11 +210,46 @@ func (r *Repository) ArchiveProject(ctx context.Context, orgID, projectID uuid.U
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err := insertProjectAudit(ctx, tx, actorUserID, orgID, "project.archived", "project", projectID.String(), requestID, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-func (r *Repository) CreateEnvironment(ctx context.Context, env Environment) error {
-	_, err := r.pool.Exec(ctx, `
+func (r *Repository) CreateEnvironment(ctx context.Context, orgID uuid.UUID, env Environment, actorUserID uuid.UUID, requestID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var orgStatus, role, projectStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return ErrNotFound
+	}
+	if orgStatus != "active" {
+		return ErrForbidden
+	}
+	if !roleAllows(role, org.Role.CanCreateEnvironment) {
+		return ErrForbidden
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT status FROM projects WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+		env.ProjectID, orgID,
+	).Scan(&projectStatus)
+	if err != nil {
+		return ErrNotFound
+	}
+	if projectStatus != "active" {
+		return ErrForbidden
+	}
+	_, err = tx.Exec(ctx, `
 		INSERT INTO project_environments (
 			id, project_id, slug, kind, status, created_at, updated_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -148,7 +261,10 @@ func (r *Repository) CreateEnvironment(ctx context.Context, env Environment) err
 		}
 		return err
 	}
-	return nil
+	if err := insertProjectAudit(ctx, tx, actorUserID, orgID, "environment.created", "environment", env.ID.String(), requestID, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *Repository) ListEnvironments(ctx context.Context, projectID uuid.UUID) ([]Environment, error) {
@@ -188,8 +304,40 @@ func (r *Repository) GetEnvironment(ctx context.Context, projectID, envID uuid.U
 	return e, nil
 }
 
-func (r *Repository) ArchiveEnvironment(ctx context.Context, projectID, envID uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `
+func (r *Repository) ArchiveEnvironment(ctx context.Context, orgID, projectID, envID, actorUserID uuid.UUID, requestID string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var orgStatus, role, projectStatus string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return ErrNotFound
+	}
+	if orgStatus != "active" {
+		return ErrForbidden
+	}
+	if !roleAllows(role, org.Role.CanArchiveEnvironment) {
+		return ErrForbidden
+	}
+	err = tx.QueryRow(ctx, `
+		SELECT status FROM projects WHERE id = $1 AND organization_id = $2 FOR UPDATE`,
+		projectID, orgID,
+	).Scan(&projectStatus)
+	if err != nil {
+		return ErrNotFound
+	}
+	if projectStatus != "active" {
+		return ErrForbidden
+	}
+	tag, err := tx.Exec(ctx, `
 		UPDATE project_environments
 		SET status = 'archived', archived_at = now(), updated_at = now()
 		WHERE id = $1 AND project_id = $2 AND status = 'active'`,
@@ -201,7 +349,10 @@ func (r *Repository) ArchiveEnvironment(ctx context.Context, projectID, envID uu
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
 	}
-	return nil
+	if err := insertProjectAudit(ctx, tx, actorUserID, orgID, "environment.archived", "environment", envID.String(), requestID, nil); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func scanProjects(rows pgx.Rows) ([]Project, error) {
@@ -237,6 +388,24 @@ func scanEnvs(rows pgx.Rows) ([]Environment, error) {
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func roleAllows(role string, allow func(org.Role) bool) bool {
+	parsed, ok := org.ParseRole(role)
+	return ok && allow(parsed)
+}
+
+func insertProjectAudit(ctx context.Context, tx pgx.Tx, actor, orgID uuid.UUID, eventType, targetType, targetID, requestID string, metadata []byte) error {
+	if metadata == nil {
+		metadata = []byte("{}")
+	}
+	_, err := tx.Exec(ctx, `
+		INSERT INTO control_plane_audit_events (
+			id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
+		uuid.Must(uuid.NewV7()), actor, orgID, eventType, targetType, targetID, requestID, metadata,
+	)
+	return err
 }
 
 func isUniqueViolation(err error) bool {

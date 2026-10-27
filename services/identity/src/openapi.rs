@@ -28,7 +28,6 @@ pub struct ServiceStatus {
 struct BearerAuth;
 
 impl Modify for BearerAuth {
-    /// Bổ sung cơ chế HTTP Bearer vào thành phần bảo mật của tài liệu OpenAPI.
     fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
         let components = openapi.components.get_or_insert_with(Default::default);
         components.add_security_scheme(
@@ -108,7 +107,6 @@ impl Modify for BearerAuth {
 )]
 pub struct ApiDoc;
 
-/// Tạo Swagger UI tại `/swagger-ui` và tài liệu OpenAPI tại `/api-docs/openapi.json`.
 pub fn swagger_ui() -> SwaggerUi {
     SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi())
 }

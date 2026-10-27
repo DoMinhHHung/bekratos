@@ -49,7 +49,7 @@ func TestValidateRejectsBadAlgAndClaims(t *testing.T) {
 	defer srv.Close()
 
 	provider := NewJWKSProvider(srv.URL, time.Minute, time.Second)
-	v := NewValidator(provider, "https://identity.bekratos.local", "bekratos-api", time.Second)
+	v := NewValidator(provider, "https://identity.bekratos.local", "bekratos-api", time.Second, 15*time.Minute)
 
 	uid := uuid.New()
 	sid := uuid.New()
@@ -100,7 +100,7 @@ func TestValidateRejectsBadAlgAndClaims(t *testing.T) {
 
 func TestMiddlewareUnauthorized(t *testing.T) {
 	provider := NewJWKSProvider("http://127.0.0.1:1/jwks", time.Minute, 50*time.Millisecond)
-	v := NewValidator(provider, "iss", "aud", time.Second)
+	v := NewValidator(provider, "iss", "aud", time.Second, 15*time.Minute)
 	mw := NewMiddleware(v, nil)
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next should not run")

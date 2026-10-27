@@ -14,6 +14,8 @@ import (
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
+const migrationAdvisoryLockKey int64 = 724510392001
+
 type migrationFile struct {
 	version int64
 	name    string
@@ -30,7 +32,20 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 
-	tx, err := pool.Begin(ctx)
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationAdvisoryLockKey); err != nil {
+		return fmt.Errorf("migration advisory lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, migrationAdvisoryLockKey)
+	}()
+
+	tx, err := conn.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin migration transaction: %w", err)
 	}

@@ -6,30 +6,15 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 )
 
-type contextKey string
-
-const requestIDKey contextKey = "request_id"
-
 func RequestID(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		id := r.Header.Get("X-Request-ID")
-		if id == "" {
-			id = uuid.NewString()
-		}
-		w.Header().Set("X-Request-ID", id)
-		ctx := context.WithValue(r.Context(), requestIDKey, id)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	return requestid.Middleware(next)
 }
 
 func RequestIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(requestIDKey).(string); ok {
-		return v
-	}
-	return ""
+	return requestid.FromContext(ctx)
 }
 
 func Recover(log *slog.Logger) func(http.Handler) http.Handler {
@@ -38,7 +23,7 @@ func Recover(log *slog.Logger) func(http.Handler) http.Handler {
 			defer func() {
 				if rec := recover(); rec != nil {
 					log.Error("panic recovered",
-						"request_id", RequestIDFromContext(r.Context()),
+						"request_id", requestid.FromContext(r.Context()),
 						"method", r.Method,
 						"path", r.URL.Path,
 						"error", fmtPanic(rec),
@@ -69,7 +54,7 @@ func AccessLog(log *slog.Logger) func(http.Handler) http.Handler {
 			rw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 			next.ServeHTTP(rw, r)
 			log.Info("request",
-				"request_id", RequestIDFromContext(r.Context()),
+				"request_id", requestid.FromContext(r.Context()),
 				"method", r.Method,
 				"path", r.URL.Path,
 				"status", rw.status,

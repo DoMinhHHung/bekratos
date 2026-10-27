@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/httpjson"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 	"github.com/google/uuid"
 )
 
@@ -63,13 +65,14 @@ func (h *Handlers) createOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createOrgRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
 	org, err := h.svc.CreateOrganization(r.Context(), principal, CreateOrgInput{
-		Slug: req.Slug, DisplayName: req.DisplayName,
-	})
+		Slug:        req.Slug,
+		DisplayName: req.DisplayName,
+	}, requestid.FromContext(r.Context()))
 	if err != nil {
 		mapErr(w, err)
 		return
@@ -125,7 +128,7 @@ func (h *Handlers) archiveOrg(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	if err := h.svc.ArchiveOrganization(r.Context(), principal, orgID); err != nil {
+	if err := h.svc.ArchiveOrganization(r.Context(), principal, orgID, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
@@ -178,7 +181,7 @@ func (h *Handlers) changeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req changeRoleRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -187,7 +190,7 @@ func (h *Handlers) changeRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_role", "invalid role")
 		return
 	}
-	if err := h.svc.ChangeMemberRole(r.Context(), principal, orgID, userID, role); err != nil {
+	if err := h.svc.ChangeMemberRole(r.Context(), principal, orgID, userID, role, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
@@ -210,7 +213,7 @@ func (h *Handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	if err := h.svc.RemoveMember(r.Context(), principal, orgID, userID); err != nil {
+	if err := h.svc.RemoveMember(r.Context(), principal, orgID, userID, requestid.FromContext(r.Context())); err != nil {
 		mapErr(w, err)
 		return
 	}
@@ -234,12 +237,6 @@ func toOrgResponse(o Organization, role Role) orgResponse {
 		resp.Role = string(role)
 	}
 	return resp
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

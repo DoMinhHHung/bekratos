@@ -12,27 +12,40 @@ import (
 
 type Claims struct {
 	jwt.RegisteredClaims
-	// sid is carried as a custom claim matching Identity AccessClaims.sid
 	SessionID string `json:"sid"`
 }
 
 type Validator struct {
-	provider *JWKSProvider
-	issuer   string
-	audience string
-	leeway   time.Duration
+	provider            *JWKSProvider
+	issuer              string
+	audience            string
+	leeway              time.Duration
+	maxAcceptanceWindow time.Duration
+	now                 func() time.Time
 }
 
-func NewValidator(provider *JWKSProvider, issuer, audience string, leeway time.Duration) *Validator {
+func NewValidator(provider *JWKSProvider, issuer, audience string, leeway, maxAcceptanceWindow time.Duration) *Validator {
 	if leeway <= 0 {
 		leeway = 30 * time.Second
 	}
-	return &Validator{
-		provider: provider,
-		issuer:   issuer,
-		audience: audience,
-		leeway:   leeway,
+	if maxAcceptanceWindow <= 0 {
+		maxAcceptanceWindow = 15 * time.Minute
 	}
+	return &Validator{
+		provider:            provider,
+		issuer:              issuer,
+		audience:            audience,
+		leeway:              leeway,
+		maxAcceptanceWindow: maxAcceptanceWindow,
+		now:                 time.Now,
+	}
+}
+
+func (v *Validator) clock() time.Time {
+	if v.now != nil {
+		return v.now()
+	}
+	return time.Now()
 }
 
 func (v *Validator) ValidateBearer(ctx context.Context, authorization string) (Principal, error) {
@@ -44,6 +57,7 @@ func (v *Validator) ValidateBearer(ctx context.Context, authorization string) (P
 }
 
 func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Principal, error) {
+	now := v.clock()
 	parser := jwt.NewParser(
 		jwt.WithValidMethods([]string{jwt.SigningMethodES256.Alg()}),
 		jwt.WithIssuer(v.issuer),
@@ -51,6 +65,7 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 		jwt.WithExpirationRequired(),
 		jwt.WithIssuedAt(),
 		jwt.WithLeeway(v.leeway),
+		jwt.WithTimeFunc(func() time.Time { return now }),
 	)
 
 	var claims Claims
@@ -65,10 +80,27 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 	if claims.SessionID == "" {
 		return Principal{}, fmt.Errorf("missing sid")
 	}
-	if claims.NotBefore != nil {
-		if err := jwt.NewValidator(jwt.WithLeeway(v.leeway)).Validate(claims); err != nil {
-			return Principal{}, fmt.Errorf("invalid token")
-		}
+	if claims.IssuedAt == nil {
+		return Principal{}, fmt.Errorf("missing iat")
+	}
+	if claims.ExpiresAt == nil {
+		return Principal{}, fmt.Errorf("missing exp")
+	}
+	if claims.NotBefore == nil {
+		return Principal{}, fmt.Errorf("missing nbf")
+	}
+
+	iat := claims.IssuedAt.Time
+	exp := claims.ExpiresAt.Time
+	if iat.After(now.Add(v.leeway)) {
+		return Principal{}, fmt.Errorf("invalid iat")
+	}
+	lifetime := exp.Sub(iat)
+	if lifetime <= 0 || lifetime > v.maxAcceptanceWindow {
+		return Principal{}, fmt.Errorf("token lifetime exceeds maximum")
+	}
+	if now.After(iat.Add(v.maxAcceptanceWindow)) {
+		return Principal{}, fmt.Errorf("token acceptance window exceeded")
 	}
 
 	userID, err := uuid.Parse(claims.Subject)
@@ -80,17 +112,12 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 		return Principal{}, fmt.Errorf("invalid sid")
 	}
 
-	var exp int64
-	if claims.ExpiresAt != nil {
-		exp = claims.ExpiresAt.Unix()
-	}
-
 	return Principal{
 		UserID:    userID,
 		SessionID: sessionID,
 		Issuer:    v.issuer,
 		Audience:  v.audience,
-		ExpiresAt: exp,
+		ExpiresAt: claims.ExpiresAt.Unix(),
 	}, nil
 }
 

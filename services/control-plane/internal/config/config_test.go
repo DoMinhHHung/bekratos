@@ -62,10 +62,22 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("JWKS_CACHE_TTL", "24h")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("long JWKS_CACHE_TTL should remain accepted: %v", err)
+	}
+	if cfg.JWKSCacheTTL != 24*time.Hour {
+		t.Fatalf("JWKSCacheTTL = %v, want 24h", cfg.JWKSCacheTTL)
+	}
+}
+
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=http://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -81,18 +93,21 @@ func TestLoadENVFile(t *testing.T) {
 	if cfg.DatabaseURL != "postgres://fromfile@localhost/db" {
 		t.Fatalf("url=%q", cfg.DatabaseURL)
 	}
+	if cfg.IdentityJWKSURL != "https://jwks.example/v1/jwks" {
+		t.Fatalf("jwks=%q", cfg.IdentityJWKSURL)
+	}
 }
 
 func TestEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=http://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("ENV_FILE", path)
 	t.Setenv("DATABASE_URL", "postgres://fromenv@localhost/db")
-	t.Setenv("IDENTITY_JWKS_URL", "http://jwks.example/v1/jwks")
+	t.Setenv("IDENTITY_JWKS_URL", "https://jwks.env.example/v1/jwks")
 	t.Setenv("JWT_ISSUER", "https://iss.example")
 	t.Setenv("JWT_AUDIENCE", "aud-example")
 	cfg, err := Load()
@@ -102,12 +117,15 @@ func TestEnvOverridesFile(t *testing.T) {
 	if cfg.DatabaseURL != "postgres://fromenv@localhost/db" {
 		t.Fatalf("expected env override, got %q", cfg.DatabaseURL)
 	}
+	if cfg.IdentityJWKSURL != "https://jwks.env.example/v1/jwks" {
+		t.Fatalf("jwks=%q", cfg.IdentityJWKSURL)
+	}
 }
 
 func TestLoadInvalidENVFileFailsFast(t *testing.T) {
 	t.Setenv("ENV_FILE", filepath.Join(t.TempDir(), "missing.env"))
 	t.Setenv("DATABASE_URL", "postgres://x")
-	t.Setenv("IDENTITY_JWKS_URL", "http://x")
+	t.Setenv("IDENTITY_JWKS_URL", "https://example.com/v1/jwks")
 	t.Setenv("JWT_ISSUER", "iss")
 	t.Setenv("JWT_AUDIENCE", "aud")
 	_, err := Load()
@@ -116,6 +134,31 @@ func TestLoadInvalidENVFileFailsFast(t *testing.T) {
 	}
 	if contains(err.Error(), "password") || contains(err.Error(), "secret") {
 		t.Fatalf("error leaked content: %v", err)
+	}
+}
+
+func TestRejectNonLoopbackHTTPJWKS(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("IDENTITY_JWKS_URL", "http://jwks.example/v1/jwks")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected rejection of non-loopback http JWKS URL")
+	}
+}
+
+func TestAcceptLoopbackHTTPJWKS(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("IDENTITY_JWKS_URL", "http://127.0.0.1:8080/v1/jwks")
+	if _, err := Load(); err != nil {
+		t.Fatalf("loopback http should be accepted: %v", err)
+	}
+}
+
+func TestAcceptHTTPSJWKS(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
+	if _, err := Load(); err != nil {
+		t.Fatalf("https should be accepted: %v", err)
 	}
 }
 

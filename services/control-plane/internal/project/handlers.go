@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/httpjson"
 	"github.com/google/uuid"
 )
 
@@ -81,7 +82,7 @@ func (h *Handlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createProjectRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -127,8 +128,13 @@ func (h *Handlers) getProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, okIDs := parseOrgProject(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
@@ -146,13 +152,18 @@ func (h *Handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, okIDs := parseOrgProject(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
 	var req updateProjectRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -172,8 +183,13 @@ func (h *Handlers) archiveProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, okIDs := parseOrgProject(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
@@ -190,13 +206,18 @@ func (h *Handlers) createEnv(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, okIDs := parseOrgProject(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
 	var req createEnvRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -216,8 +237,13 @@ func (h *Handlers) listEnvs(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, okIDs := parseOrgProject(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
@@ -239,17 +265,27 @@ func (h *Handlers) getEnv(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, envID, okIDs := parseOrgProjectEnv(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
-	env, err := h.svc.GetEnvironment(r.Context(), principal, orgID, projectID, envID)
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	envID, err := uuid.Parse(r.PathValue("envID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	e, err := h.svc.GetEnvironment(r.Context(), principal, orgID, projectID, envID)
 	if err != nil {
 		mapErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toEnvResponse(env))
+	writeJSON(w, http.StatusOK, toEnvResponse(e))
 }
 
 func (h *Handlers) archiveEnv(w http.ResponseWriter, r *http.Request) {
@@ -258,8 +294,18 @@ func (h *Handlers) archiveEnv(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 		return
 	}
-	orgID, projectID, envID, okIDs := parseOrgProjectEnv(r)
-	if !okIDs {
+	orgID, err := uuid.Parse(r.PathValue("orgID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	projectID, err := uuid.Parse(r.PathValue("projectID"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, "not_found", "not found")
+		return
+	}
+	envID, err := uuid.Parse(r.PathValue("envID"))
+	if err != nil {
 		writeErr(w, http.StatusNotFound, "not_found", "not found")
 		return
 	}
@@ -268,18 +314,6 @@ func (h *Handlers) archiveEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-func parseOrgProject(r *http.Request) (uuid.UUID, uuid.UUID, bool) {
-	orgID, err1 := uuid.Parse(r.PathValue("orgID"))
-	projectID, err2 := uuid.Parse(r.PathValue("projectID"))
-	return orgID, projectID, err1 == nil && err2 == nil
-}
-
-func parseOrgProjectEnv(r *http.Request) (uuid.UUID, uuid.UUID, uuid.UUID, bool) {
-	orgID, projectID, ok := parseOrgProject(r)
-	envID, err := uuid.Parse(r.PathValue("envID"))
-	return orgID, projectID, envID, ok && err == nil
 }
 
 func toProjectResponse(p Project) projectResponse {
@@ -309,12 +343,6 @@ func toEnvResponse(e Environment) envResponse {
 		resp.ArchivedAt = &s
 	}
 	return resp
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(dst)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

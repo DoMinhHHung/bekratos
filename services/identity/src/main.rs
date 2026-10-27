@@ -19,10 +19,6 @@ use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing_subscriber::EnvFilter;
 
-/// Nạp cấu hình, kết nối dịch vụ, chạy migration rồi khởi động HTTP và các worker.
-///
-/// Dùng khóa ký trong database; chỉ thử khóa PEM cấu hình khi bootstrap khóa
-/// thất bại. Thoát tiến trình với mã 1 khi khởi tạo hoặc phục vụ HTTP thất bại.
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -241,9 +237,6 @@ async fn main() {
     run_server(state, shutdown_tx, worker_handles, pool).await;
 }
 
-/// Phục vụ HTTP tại địa chỉ cấu hình và phát tín hiệu dừng cho các worker
-/// khi nhận yêu cầu tắt. Sau khi HTTP dừng, chờ worker tối đa 25 giây rồi đóng pool.
-/// Lỗi bind hoặc phục vụ HTTP làm tiến trình thoát với mã 1.
 async fn run_server(
     state: AppState,
     shutdown_tx: watch::Sender<bool>,
@@ -290,9 +283,6 @@ async fn run_server(
     pool.close().await;
     tracing::info!("identity service stopped");
 }
-
-/// Chờ Ctrl+C hoặc SIGTERM trên Unix. Nếu không cài được một bộ nhận tín hiệu,
-/// nhánh đó tiếp tục chờ vô hạn để nhánh còn lại vẫn có thể yêu cầu dừng.
 async fn shutdown_signal() {
     let ctrl_c = async {
         match tokio::signal::ctrl_c().await {
@@ -328,9 +318,6 @@ async fn shutdown_signal() {
     tracing::info!("shutdown signal received");
 }
 
-/// Chuyển tọa độ `x`, `y` base64url không padding của JWK thành khóa công khai
-/// P-256 dạng PEM. Trả `Err(())` nếu thiếu tọa độ, tọa độ không dài 32 byte,
-/// điểm không hợp lệ hoặc không tạo được PEM.
 fn jwk_to_public_pem(jwk: &serde_json::Value) -> Result<String, ()> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;

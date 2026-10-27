@@ -14,9 +14,14 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/sync/singleflight"
 )
 
-const maxJWKSBytes = 1 << 20
+const (
+	maxJWKSBytes     = 1 << 20
+	hardMaxStaleTTL  = 5 * time.Minute
+	defaultRefreshCD = 5 * time.Second
+)
 
 type jwkKey struct {
 	Kty string `json:"kty"`
@@ -33,12 +38,18 @@ type jwksDocument struct {
 }
 
 type JWKSProvider struct {
-	url        string
-	httpClient *http.Client
-	ttl        time.Duration
-	mu         sync.RWMutex
-	keys       map[string]*ecdsa.PublicKey
-	fetchedAt  time.Time
+	url            string
+	httpClient     *http.Client
+	effectiveTTL   time.Duration
+	staleTTL       time.Duration
+	refreshCD      time.Duration
+	mu             sync.RWMutex
+	keys           map[string]*ecdsa.PublicKey
+	fetchedAt      time.Time
+	lastRefreshAt  time.Time
+	lastRefreshErr error
+	now            func() time.Time
+	sf             singleflight.Group
 }
 
 func NewJWKSProvider(url string, ttl, timeout time.Duration) *JWKSProvider {
@@ -48,14 +59,32 @@ func NewJWKSProvider(url string, ttl, timeout time.Duration) *JWKSProvider {
 	if timeout <= 0 {
 		timeout = 3 * time.Second
 	}
+	effectiveTTL := ttl
+	if effectiveTTL > hardMaxStaleTTL {
+		effectiveTTL = hardMaxStaleTTL
+	}
+	stale := hardMaxStaleTTL
+	if ttl <= hardMaxStaleTTL/3 {
+		stale = ttl * 3
+	}
 	return &JWKSProvider{
 		url: url,
 		httpClient: &http.Client{
 			Timeout: timeout,
 		},
-		ttl:  ttl,
-		keys: make(map[string]*ecdsa.PublicKey),
+		effectiveTTL: effectiveTTL,
+		staleTTL:     stale,
+		refreshCD:    defaultRefreshCD,
+		keys:         make(map[string]*ecdsa.PublicKey),
+		now:          time.Now,
 	}
+}
+
+func (p *JWKSProvider) currentTime() time.Time {
+	if p.now != nil {
+		return p.now()
+	}
+	return time.Now()
 }
 
 func (p *JWKSProvider) Keyfunc(ctx context.Context) jwt.Keyfunc {
@@ -78,15 +107,25 @@ func (p *JWKSProvider) Keyfunc(ctx context.Context) jwt.Keyfunc {
 func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
 	p.mu.RLock()
 	key, ok := p.keys[kid]
-	fresh := !p.fetchedAt.IsZero() && time.Since(p.fetchedAt) < p.ttl
+	age := p.currentTime().Sub(p.fetchedAt)
+	fresh := !p.fetchedAt.IsZero() && age < p.effectiveTTL
+	staleOK := ok && !p.fetchedAt.IsZero() && age < p.staleTTL && age < hardMaxStaleTTL
 	p.mu.RUnlock()
+
 	if ok && fresh {
 		return key, nil
 	}
 
-	if err := p.refresh(ctx); err != nil {
-		if ok {
-			return key, nil
+	if err := p.refreshSerialized(ctx); err != nil {
+		if staleOK {
+			p.mu.RLock()
+			key, ok = p.keys[kid]
+			age = p.currentTime().Sub(p.fetchedAt)
+			staleOK = ok && !p.fetchedAt.IsZero() && age < p.staleTTL && age < hardMaxStaleTTL
+			p.mu.RUnlock()
+			if staleOK {
+				return key, nil
+			}
 		}
 		return nil, err
 	}
@@ -97,7 +136,41 @@ func (p *JWKSProvider) lookup(ctx context.Context, kid string) (*ecdsa.PublicKey
 	if !ok {
 		return nil, fmt.Errorf("unknown kid")
 	}
+	age = p.currentTime().Sub(p.fetchedAt)
+	if p.fetchedAt.IsZero() || age >= p.staleTTL || age >= hardMaxStaleTTL {
+		return nil, fmt.Errorf("jwks stale")
+	}
 	return key, nil
+}
+
+func (p *JWKSProvider) refreshSerialized(ctx context.Context) error {
+	p.mu.RLock()
+	cdActive := !p.lastRefreshAt.IsZero() && p.currentTime().Sub(p.lastRefreshAt) < p.refreshCD
+	lastErr := p.lastRefreshErr
+	p.mu.RUnlock()
+	if cdActive {
+		if lastErr != nil {
+			return lastErr
+		}
+		return nil
+	}
+
+	_, err, _ := p.sf.Do("jwks", func() (any, error) {
+		p.mu.RLock()
+		if !p.lastRefreshAt.IsZero() && p.currentTime().Sub(p.lastRefreshAt) < p.refreshCD {
+			err := p.lastRefreshErr
+			p.mu.RUnlock()
+			return nil, err
+		}
+		p.mu.RUnlock()
+		err := p.refresh(ctx)
+		p.mu.Lock()
+		p.lastRefreshAt = p.currentTime()
+		p.lastRefreshErr = err
+		p.mu.Unlock()
+		return nil, err
+	})
+	return err
 }
 
 func (p *JWKSProvider) refresh(ctx context.Context) error {
@@ -135,12 +208,18 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 		if k.Alg != "" && k.Alg != "ES256" {
 			continue
 		}
+		if k.Use != "" && k.Use != "sig" {
+			continue
+		}
 		if k.Kid == "" || k.X == "" || k.Y == "" {
 			continue
 		}
+		if _, dup := next[k.Kid]; dup {
+			return fmt.Errorf("jwks duplicate kid")
+		}
 		pub, err := parseECPublicKey(k.X, k.Y)
 		if err != nil {
-			continue
+			return fmt.Errorf("jwks invalid key material")
 		}
 		next[k.Kid] = pub
 	}
@@ -150,7 +229,7 @@ func (p *JWKSProvider) refresh(ctx context.Context) error {
 
 	p.mu.Lock()
 	p.keys = next
-	p.fetchedAt = time.Now()
+	p.fetchedAt = p.currentTime()
 	p.mu.Unlock()
 	return nil
 }

@@ -3,7 +3,6 @@ package org
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,43 +25,6 @@ type Repository struct {
 
 func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
-}
-
-func (r *Repository) CreateOrganizationWithOwner(ctx context.Context, org Organization, ownerUserID uuid.UUID) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	_, err = tx.Exec(ctx, `
-		INSERT INTO organizations (
-			id, slug, display_name, status, created_by_identity_user_id, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		org.ID, org.Slug, org.DisplayName, org.Status, org.CreatedByIdentityUserID, org.CreatedAt, org.UpdatedAt,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrConflict
-		}
-		return err
-	}
-
-	now := org.CreatedAt
-	_, err = tx.Exec(ctx, `
-		INSERT INTO organization_memberships (
-			organization_id, identity_user_id, role, status, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6)`,
-		org.ID, ownerUserID, RoleOwner, MembershipActive, now, now,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return ErrConflict
-		}
-		return err
-	}
-
-	return tx.Commit(ctx)
 }
 
 func (r *Repository) ListOrganizationsForUser(ctx context.Context, userID uuid.UUID) ([]Organization, error) {
@@ -120,20 +82,6 @@ func (r *Repository) GetActiveMembership(ctx context.Context, orgID, userID uuid
 	return m, nil
 }
 
-func (r *Repository) ArchiveOrganization(ctx context.Context, orgID uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE organizations
-		SET status = 'archived', archived_at = now(), updated_at = now()
-		WHERE id = $1 AND status = 'active'`, orgID)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 func (r *Repository) ListMembers(ctx context.Context, orgID uuid.UUID) ([]Membership, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT organization_id, identity_user_id, role, status, created_at, updated_at
@@ -153,118 +101,6 @@ func (r *Repository) ListMembers(ctx context.Context, orgID uuid.UUID) ([]Member
 		out = append(out, m)
 	}
 	return out, rows.Err()
-}
-
-func (r *Repository) ChangeMemberRole(ctx context.Context, orgID, targetUserID uuid.UUID, newRole Role) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, orgID); err != nil {
-		return err
-	}
-
-	var current Role
-	var status MembershipStatus
-	err = tx.QueryRow(ctx, `
-		SELECT role, status FROM organization_memberships
-		WHERE organization_id = $1 AND identity_user_id = $2 FOR UPDATE`,
-		orgID, targetUserID,
-	).Scan(&current, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if status != MembershipActive {
-		return ErrNotFound
-	}
-
-	if current == RoleOwner && newRole != RoleOwner {
-		var owners int
-		if err := tx.QueryRow(ctx, `
-			SELECT COUNT(*) FROM organization_memberships
-			WHERE organization_id = $1 AND status = 'active' AND role = 'owner'`, orgID,
-		).Scan(&owners); err != nil {
-			return err
-		}
-		if owners <= 1 {
-			return ErrLastOwner
-		}
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE organization_memberships
-		SET role = $3, updated_at = now()
-		WHERE organization_id = $1 AND identity_user_id = $2 AND status = 'active'`,
-		orgID, targetUserID, newRole,
-	)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return tx.Commit(ctx)
-}
-
-func (r *Repository) RemoveMember(ctx context.Context, orgID, targetUserID uuid.UUID) error {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, orgID); err != nil {
-		return err
-	}
-
-	var current Role
-	var status MembershipStatus
-	err = tx.QueryRow(ctx, `
-		SELECT role, status FROM organization_memberships
-		WHERE organization_id = $1 AND identity_user_id = $2 FOR UPDATE`,
-		orgID, targetUserID,
-	).Scan(&current, &status)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if status != MembershipActive {
-		return ErrNotFound
-	}
-
-	if current == RoleOwner {
-		var owners int
-		if err := tx.QueryRow(ctx, `
-			SELECT COUNT(*) FROM organization_memberships
-			WHERE organization_id = $1 AND status = 'active' AND role = 'owner'`, orgID,
-		).Scan(&owners); err != nil {
-			return err
-		}
-		if owners <= 1 {
-			return ErrLastOwner
-		}
-	}
-
-	tag, err := tx.Exec(ctx, `
-		UPDATE organization_memberships
-		SET status = 'removed', updated_at = now()
-		WHERE organization_id = $1 AND identity_user_id = $2 AND status = 'active'`,
-		orgID, targetUserID,
-	)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return tx.Commit(ctx)
 }
 
 func (r *Repository) InsertAudit(ctx context.Context, id uuid.UUID, actor *uuid.UUID, orgID *uuid.UUID, eventType, targetType, targetID, requestID string, metadata []byte) error {
@@ -297,8 +133,4 @@ func scanOrgs(rows pgx.Rows) ([]Organization, error) {
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
-}
-
-func slugNormalize(s string) string {
-	return fmt.Sprintf("%s", s)
 }
