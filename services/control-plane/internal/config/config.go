@@ -26,6 +26,7 @@ type Config struct {
 	MigrateOnStartup    bool
 	IdentityJWKSURL     string
 	IdentityProfileURL  string
+	IdentityServiceToken string
 	RuntimeAPIURL       string
 	RuntimeServiceToken string
 	RuntimeHTTPTimeout  time.Duration
@@ -98,13 +99,17 @@ func Load() (*Config, error) {
 		}
 	}
 
+	cfg.IdentityServiceToken = strings.TrimSpace(os.Getenv("IDENTITY_SERVICE_TOKEN"))
+	if len(cfg.IdentityServiceToken) < 32 {
+		return nil, fmt.Errorf("IDENTITY_SERVICE_TOKEN must contain at least 32 characters")
+	}
 	cfg.IdentityProfileURL = strings.TrimSpace(os.Getenv("IDENTITY_PROFILE_URL"))
 	if cfg.IdentityProfileURL == "" {
 		identityURL, err := url.Parse(cfg.IdentityJWKSURL)
 		if err != nil {
 			return nil, fmt.Errorf("IDENTITY_PROFILE_URL could not be derived from IDENTITY_JWKS_URL")
 		}
-		identityURL.Path = "/v1/me"
+		identityURL.Path = "/v1/internal/session"
 		identityURL.RawQuery = ""
 		identityURL.Fragment = ""
 		cfg.IdentityProfileURL = identityURL.String()
