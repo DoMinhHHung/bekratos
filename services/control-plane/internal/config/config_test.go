@@ -78,7 +78,7 @@ func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nIDENTITY_SERVICE_TOKEN=local-dev-only-not-for-production-identity-service-token\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestLoadENVFile(t *testing.T) {
 func TestEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nIDENTITY_SERVICE_TOKEN=local-dev-only-not-for-production-identity-service-token\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
