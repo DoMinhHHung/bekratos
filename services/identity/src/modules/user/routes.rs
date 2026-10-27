@@ -36,6 +36,8 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
         (status = 200, description = "Active session and verified primary email state", body = SessionValidationResponse),
         (status = 401, description = "Invalid service credential or inactive user session"),
         (status = 429, description = "Internal session validation rate limit exceeded"),
+        (status = 503, description = "Rate limiter unavailable"),
+        (status = 429, description = "Internal session validation rate limit exceeded"),
         (status = 503, description = "Rate limiter unavailable")
     ),
     security(("bearer_auth" = [])),
