@@ -18,8 +18,11 @@ pub struct Config {
     pub magic_link_hmac_keys: String,
     pub magic_link_active_kid: String,
     pub app_public_base_url: String,
+    pub app_env: String,
     pub mail_provider: String,
     pub mail_from: String,
+    pub mail_api_key: String,
+    pub mail_timeout_secs: u64,
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
@@ -50,8 +53,11 @@ impl std::fmt::Debug for Config {
             .field("magic_link_hmac_keys", &"[REDACTED]")
             .field("magic_link_active_kid", &self.magic_link_active_kid)
             .field("app_public_base_url", &self.app_public_base_url)
+            .field("app_env", &self.app_env)
             .field("mail_provider", &self.mail_provider)
             .field("mail_from", &self.mail_from)
+            .field("mail_api_key", &"[REDACTED]")
+            .field("mail_timeout_secs", &self.mail_timeout_secs)
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -137,8 +143,37 @@ impl Config {
         if app_public_base_url.is_empty() {
             return Err(AppError::config("APP_PUBLIC_BASE_URL must not be empty"));
         }
-        let mail_provider = env::var("MAIL_PROVIDER").unwrap_or_else(|_| "console".to_string());
+        let app_env = env::var("APP_ENV")
+            .unwrap_or_else(|_| "development".to_string())
+            .to_ascii_lowercase();
+        if !matches!(app_env.as_str(), "development" | "test" | "production") {
+            return Err(AppError::config("APP_ENV must be development, test, or production"));
+        }
+
+        let mail_provider = env::var("MAIL_PROVIDER")
+            .unwrap_or_else(|_| "console".to_string())
+            .to_ascii_lowercase();
+        if !matches!(mail_provider.as_str(), "console" | "none" | "resend") {
+            return Err(AppError::config("MAIL_PROVIDER must be console, none, or resend"));
+        }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
+        let mail_api_key = env::var("MAIL_API_KEY").unwrap_or_default();
+        let mail_timeout_secs: u64 = env::var("MAIL_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .map_err(|_| AppError::config("MAIL_TIMEOUT_SECS must be a valid u64"))?;
+        if mail_timeout_secs == 0 || mail_timeout_secs > 60 {
+            return Err(AppError::config("MAIL_TIMEOUT_SECS must be between 1 and 60"));
+        }
+        if mail_provider == "resend" && mail_api_key.trim().is_empty() {
+            return Err(AppError::config("MAIL_API_KEY is required when MAIL_PROVIDER=resend"));
+        }
+        if app_env == "production" && mail_provider != "resend" {
+            return Err(AppError::config("production requires MAIL_PROVIDER=resend"));
+        }
+        if app_env == "production" && !app_public_base_url.starts_with("https://") {
+            return Err(AppError::config("production requires HTTPS APP_PUBLIC_BASE_URL"));
+        }
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
             .unwrap_or_else(|_| "19456".to_string())
@@ -210,8 +245,11 @@ impl Config {
             magic_link_hmac_keys,
             magic_link_active_kid,
             app_public_base_url,
+            app_env,
             mail_provider,
             mail_from,
+            mail_api_key,
+            mail_timeout_secs,
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
