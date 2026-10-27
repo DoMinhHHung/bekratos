@@ -2,6 +2,7 @@ package configversion
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
@@ -61,7 +62,7 @@ func (s *Service) ListVersions(ctx context.Context, principal auth.Principal, or
 	if !m.Role.CanReadSchema() {
 		return nil, ErrForbidden
 	}
-	if _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
+	if _, _, _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
 		return nil, err
 	}
 	return s.repo.ListVersions(ctx, envID, 50)
@@ -75,7 +76,7 @@ func (s *Service) GetVersion(ctx context.Context, principal auth.Principal, orgI
 	if !m.Role.CanReadSchema() {
 		return Version{}, ErrForbidden
 	}
-	if _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
+	if _, _, _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
 		return Version{}, err
 	}
 	return s.repo.GetVersion(ctx, envID, versionID)
@@ -89,7 +90,7 @@ func (s *Service) GetJob(ctx context.Context, principal auth.Principal, orgID, p
 	if !m.Role.CanReadSchema() {
 		return ApplyJob{}, ErrForbidden
 	}
-	if _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
+	if _, _, _, err := s.repo.GetEnvironmentStatuses(ctx, orgID, projectID, envID); err != nil {
 		return ApplyJob{}, err
 	}
 	return s.repo.GetJobByVersion(ctx, envID, versionID)
@@ -153,7 +154,7 @@ func (s *Service) processJob(ctx context.Context, job ApplyJob) error {
 	if err != nil {
 		code := "runtime_error"
 		msg := "runtime apply failed"
-		if err == ErrRuntimeUnavailable {
+		if errors.Is(err, ErrRuntimeUnavailable) {
 			code = "runtime_unavailable"
 			msg = "runtime configuration apply contract is not configured"
 		}

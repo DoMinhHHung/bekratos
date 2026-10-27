@@ -42,7 +42,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 
 	configVersionRepo := configversion.NewRepository(pool)
 	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter())
-	configversion.NewHandlers(configVersionSvc).Register(mux, authMW)
+	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
@@ -51,6 +51,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	projectHandlers.Register(mux, authMW)
 	moduleHandlers.Register(mux, authMW)
 	schemaHandlers.Register(mux, authMW)
+	configVersionHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)

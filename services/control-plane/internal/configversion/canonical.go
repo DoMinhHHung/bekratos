@@ -37,7 +37,7 @@ func CanonicalizeAndHash(m Manifest) (canonical string, hash string, err error) 
 	}
 	sort.Slice(m.ModulePins, func(i, j int) bool {
 		return m.ModulePins[i].ModuleSlug < m.ModulePins[j].ModuleSlug
-	}
+	})
 	for i := 1; i < len(m.ModulePins); i++ {
 		if m.ModulePins[i].ModuleSlug == m.ModulePins[i-1].ModuleSlug {
 			return "", "", fmt.Errorf("%w: duplicate module pin %q", ErrValidation, m.ModulePins[i].ModuleSlug)
