@@ -592,10 +592,17 @@ async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
         user_id,
         "email_verify",
         "expired-email@example.test",
-        Utc::now() - ChronoDuration::minutes(1),
+        Utc::now() + ChronoDuration::hours(1),
     )
     .await
-    .expect("insert expired token");
+    .expect("insert token for expiry test");
+    sqlx::query(
+        "UPDATE token.verification_tokens SET created_at = now() - interval '2 minutes', expires_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(expired_id)
+    .execute(&pool)
+    .await
+    .expect("expire token after creation");
     let expired_claim = repo.claim_due_for_delivery(10, 60).await.expect("claim expired token");
     assert!(expired_claim.is_empty());
     delete_user(&pool, user_id).await;
