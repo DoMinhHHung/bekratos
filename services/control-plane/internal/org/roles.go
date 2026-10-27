@@ -86,3 +86,7 @@ func (r Role) CanReadSchema() bool {
 func (r Role) CanMutateSchema() bool {
 	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper
 }
+
+func (r Role) CanManageAPIKeys() bool {
+	return r == RoleOwner || r == RoleAdmin
+}

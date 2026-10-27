@@ -34,7 +34,7 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	if files[0].sql == "" {
 		t.Error("migration SQL is empty")
 	}
-	var has008 bool
+	var has008, has010 bool
 	var maxVersion int64
 	for _, f := range files {
 		if f.version > maxVersion {
@@ -43,12 +43,18 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 		if f.version == 8 {
 			has008 = true
 		}
+		if f.version == 10 {
+			has010 = true
+		}
 	}
 	if !has008 {
 		t.Fatal("expected migration version 8 (schema_drafts)")
 	}
-	if maxVersion < 8 {
-		t.Fatalf("max migration version=%d, want >= 8", maxVersion)
+	if !has010 {
+		t.Fatal("expected migration version 10 (api_keys)")
+	}
+	if maxVersion < 10 {
+		t.Fatalf("max migration version=%d, want >= 10", maxVersion)
 	}
 }
 
@@ -86,8 +92,8 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest < 8 {
-		t.Fatalf("latest migration=%d, want >= 8", latest)
+	if latest < 10 {
+		t.Fatalf("latest migration=%d, want >= 10", latest)
 	}
 
 	var draftTable int
@@ -99,6 +105,21 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	}
 	if draftTable != 1 {
 		t.Fatal("environment_schema_drafts missing after migrate")
+	}
+
+	if latest < 10 {
+		t.Fatalf("latest migration=%d, want >= 10", latest)
+	}
+
+	var apiKeysTable int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'api_keys'`).Scan(&apiKeysTable); err != nil {
+		t.Fatal(err)
+	}
+	if apiKeysTable != 1 {
+		t.Fatal("api_keys missing after migrate")
 	}
 
 	var nullable string
@@ -163,7 +184,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, migration := range files {
-		if migration.version > 8 {
+		if migration.version > 9 {
 			continue
 		}
 		if _, err := tx.Exec(ctx, migration.sql); err != nil {
@@ -180,15 +201,27 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	}
 
 	if err := Migrate(ctx, upgradePool); err != nil {
-		t.Fatalf("upgrade from schema version 8: %v", err)
+		t.Fatalf("upgrade from schema version 9: %v", err)
 	}
 	var latest int64
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 9 {
-		t.Fatalf("latest migration=%d, want 9", latest)
+	if latest != 10 {
+		t.Fatalf("latest migration=%d, want 10", latest)
 	}
+
+	var apiKeysTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'api_keys'`).Scan(&apiKeysTable); err != nil {
+		t.Fatal(err)
+	}
+	if apiKeysTable != 1 {
+		t.Fatal("api_keys missing after upgrade to 10")
+	}
+
 	var cfgTable int
 	if err := upgradePool.QueryRow(ctx, `
 		SELECT count(*) FROM information_schema.tables
