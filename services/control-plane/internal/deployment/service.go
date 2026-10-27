@@ -69,7 +69,7 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 	res, err := s.provider.Provision(ctx, req)
 	if err != nil && !errors.Is(err, ErrProviderUnavailable) {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-			return s.repo.MarkFailed(ctx, d, workerID, "provider_timeout", "provider call timed out", false)
+			return s.repo.MarkFailed(ctx, d, workerID, "provider_ambiguous", "provider call timed out; reconciliation required", true)
 		}
 		return s.repo.MarkFailed(ctx, d, workerID, "provider_error", "provider call failed", false)
 	}
@@ -89,7 +89,7 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 	case OutcomeRetryable:
 		return s.repo.MarkFailed(ctx, d, workerID, res.Code, res.Message, false)
 	case OutcomeAmbiguous:
-		return s.repo.MarkFailed(ctx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", false)
+		return s.repo.MarkFailed(ctx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
 	default:
 		return s.repo.MarkFailed(ctx, d, workerID, "provider_unknown", "unknown provider outcome", true)
 	}
