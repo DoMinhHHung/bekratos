@@ -15,7 +15,6 @@ import (
 func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 	userID := uuid.New()
 	sessionID := uuid.New()
-	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %s, want GET", r.Method)
