@@ -80,16 +80,32 @@ func (s *Service) ProcessOnce(ctx context.Context, workerID string, lease time.D
 }
 
 func (s *Service) processOne(ctx context.Context, workerID string, d Deployment) error {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+
+	manifest, manifestErr := s.repo.LoadConfigurationManifest(ctx, d.EnvironmentID, d.ConfigurationVersionID)
+	if manifestErr != nil {
+		terminal := errors.Is(manifestErr, ErrManifestInvalid) || errors.Is(manifestErr, ErrConfigMismatch)
+		code := "configuration_manifest_unavailable"
+		message := "immutable configuration manifest could not be loaded"
+		if terminal {
+			code = "configuration_manifest_invalid"
+			message = "immutable configuration manifest failed validation"
+		}
+		return s.repo.MarkFailed(persistCtx, d, workerID, code, message, terminal)
+	}
+
 	req := ProvisionRequest{
 		DeploymentID:           d.ID,
 		EnvironmentID:          d.EnvironmentID,
 		ConfigurationVersionID: d.ConfigurationVersionID,
+		ManifestFormatVersion:  manifest.FormatVersion,
+		ManifestSHA256:         manifest.SHA256,
+		ManifestCanonical:      manifest.Canonical,
 		ProviderRequestID:      d.ProviderRequestID,
 		TargetMode:             d.TargetMode,
 	}
 	res, providerErr := s.provider.Provision(ctx, req)
-	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	defer cancel()
 
 	if ctx.Err() != nil || errors.Is(providerErr, context.DeadlineExceeded) || errors.Is(providerErr, context.Canceled) {
 		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
