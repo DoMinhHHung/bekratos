@@ -85,7 +85,13 @@ func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\\nIDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect\\nIDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789\\nJWT_ISSUER=https://iss.example\\nJWT_AUDIENCE=aud-example\\n"
+	content := `DATABASE_URL=postgres://fromfile@localhost/db
+IDENTITY_JWKS_URL=https://jwks.example/v1/jwks
+IDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect
+IDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789
+JWT_ISSUER=https://iss.example
+JWT_AUDIENCE=aud-example
+`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +117,13 @@ func TestLoadENVFile(t *testing.T) {
 func TestEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\\nIDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect\\nIDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789\\nJWT_ISSUER=https://iss.example\\nJWT_AUDIENCE=aud-example\\n"
+	content := `DATABASE_URL=postgres://fromfile@localhost/db
+IDENTITY_JWKS_URL=https://jwks.example/v1/jwks
+IDENTITY_INTROSPECTION_URL=https://identity.example/internal/v1/identity/introspect
+IDENTITY_SERVICE_API_TOKEN=synthetic-identity-service-token-0123456789
+JWT_ISSUER=https://iss.example
+JWT_AUDIENCE=aud-example
+`
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
