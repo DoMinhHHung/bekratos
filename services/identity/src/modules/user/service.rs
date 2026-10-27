@@ -56,6 +56,7 @@ pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<Prof
         id: user_id,
         status: bundle.user.status,
         email: bundle.email,
+        email_verified: bundle.email_verified,
         username: bundle.username,
         full_name: bundle.full_name,
         display_name: bundle.display_name,
