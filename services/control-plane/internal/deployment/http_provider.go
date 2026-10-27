@@ -37,24 +37,24 @@ type runtimeProvisionResponse struct {
 	Code                 string    `json:"code"`
 	DeploymentID         uuid.UUID `json:"deployment_id"`
 	EnvironmentID        uuid.UUID `json:"environment_id"`
-	VersionID             uuid.UUID `json:"configuration_version_id"`
-	ProviderRequestID     string    `json:"provider_request_id"`
-	URL                   string    `json:"url"`
-	Host                  string    `json:"host"`
-	Region                string    `json:"region"`
-	ReadinessProbePassed  bool      `json:"readiness_probe_passed"`
-	ReadinessProbeID      string    `json:"readiness_probe_id"`
-	ReadinessObservedAt   time.Time `json:"readiness_observed_at"`
+	VersionID            uuid.UUID `json:"configuration_version_id"`
+	ProviderRequestID    string    `json:"provider_request_id"`
+	URL                  string    `json:"url"`
+	Host                 string    `json:"host"`
+	Region               string    `json:"region"`
+	ReadinessProbePassed bool      `json:"readiness_probe_passed"`
+	ReadinessProbeID     string    `json:"readiness_probe_id"`
+	ReadinessObservedAt  time.Time `json:"readiness_observed_at"`
 }
 
 func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
 	body := runtimeProvisionRequest{
-		ContractVersion:        "v1",
-		DeploymentID:           req.DeploymentID,
-		EnvironmentID:          req.EnvironmentID,
-		ConfigurationVersionID: req.ConfigurationVersionID,
-		ProviderRequestID:      req.ProviderRequestID,
-		TargetMode:             req.TargetMode,
+		ContractVersion       : undefined,
+		DeploymentID          : undefined,
+		EnvironmentID         : undefined,
+		ConfigurationVersionID: undefined,
+		ProviderRequestID     : undefined,
+		TargetMode            : undefined,
 	}
 	status, responseBody, err := p.client.Post(ctx, "/v1/internal/deployments", req.ProviderRequestID, body)
 	if err != nil {
@@ -63,19 +63,19 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	switch {
 	case status == http.StatusTooManyRequests:
 		return ProvisionResult{
-			Outcome: OutcomeRetryable,
-			Code: "runtime_busy",
-			Message: "runtime rejected the request before accepting an operation",
-			RequestID: req.ProviderRequestID,
+			Outcome  : undefined,
+			Code     : undefined,
+			Message  : undefined,
+			RequestID: undefined,
 		}, nil
 	case status == http.StatusRequestTimeout || status >= 500 || status < 200 || status >= 300 && status < 400:
 		return ambiguousProviderResult(req.ProviderRequestID), nil
 	case status >= 400:
 		return ProvisionResult{
-			Outcome: OutcomeFailure,
-			Code: "runtime_rejected",
-			Message: "runtime rejected deployment request",
-			RequestID: req.ProviderRequestID,
+			Outcome  : undefined,
+			Code     : undefined,
+			Message  : undefined,
+			RequestID: undefined,
 		}, nil
 	}
 
@@ -98,28 +98,28 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	}
 
 	return ProvisionResult{
-		Outcome:              outcome,
-		Code:                 safeRuntimeCode(result.Code, outcome),
-		Message:              safeRuntimeMessage(outcome),
-		URL:                  result.URL,
-		Host:                 result.Host,
-		Region:               result.Region,
-		RequestID:            result.ProviderRequestID,
-		DeploymentID:         result.DeploymentID,
-		EnvironmentID:        result.EnvironmentID,
-		VersionID:            result.VersionID,
-		ReadinessProbePassed: result.ReadinessProbePassed,
-		ReadinessProbeID:     result.ReadinessProbeID,
-		ReadinessObservedAt:  result.ReadinessObservedAt,
+		Outcome             : undefined,
+		Code                : undefined,
+		Message             : undefined,
+		URL                 : undefined,
+		Host                : undefined,
+		Region              : undefined,
+		RequestID           : undefined,
+		DeploymentID        : undefined,
+		EnvironmentID       : undefined,
+		VersionID           : undefined,
+		ReadinessProbePassed: undefined,
+		ReadinessProbeID    : undefined,
+		ReadinessObservedAt : undefined,
 	}, nil
 }
 
 func ambiguousProviderResult(requestID string) ProvisionResult {
 	return ProvisionResult{
-		Outcome: OutcomeAmbiguous,
-		Code: "runtime_operation_ambiguous",
-		Message: "runtime operation outcome is unknown; reconciliation is required",
-		RequestID: requestID,
+		Outcome  : undefined,
+		Code     : undefined,
+		Message  : undefined,
+		RequestID: undefined,
 	}
 }
 
