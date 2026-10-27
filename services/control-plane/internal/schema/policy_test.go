@@ -88,6 +88,35 @@ func TestValidatePolicyTypeMismatch(t *testing.T) {
 	}
 }
 
+func TestValidatePolicyStrictDateAndUUIDLiterals(t *testing.T) {
+	ent := sampleEntity()
+	ent.Fields["created"] = FieldDefinition{Type: TypeDate}
+	ent.Fields["owner_id"] = FieldDefinition{Type: TypeUUID}
+
+	for _, tc := range []struct {
+		name  string
+		field string
+		value any
+		valid bool
+	}{
+		{name: "valid date", field: "created", value: "2026-10-27", valid: true},
+		{name: "invalid date", field: "created", value: "not-a-date"},
+		{name: "valid uuid", field: "owner_id", value: "019a2f1e-1d2b-7c33-9ef0-123456789abc", valid: true},
+		{name: "invalid uuid", field: "owner_id", value: "not-a-uuid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			count := 0
+			err := ValidatePolicy(&PolicyNode{Op: "eq", Field: tc.field, Value: tc.value}, ent, 0, &count)
+			if tc.valid && err != nil {
+				t.Fatalf("valid comparison rejected: %v", err)
+			}
+			if !tc.valid && !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatalf("expected invalid policy, got %v", err)
+			}
+		})
+	}
+}
+
 func TestValidatePolicyDepthLimit(t *testing.T) {
 	ent := sampleEntity()
 	node := &PolicyNode{Op: "not", Args: []PolicyNode{{Op: "eq", Field: "status", Value: "a"}}}

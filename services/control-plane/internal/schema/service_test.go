@@ -53,6 +53,19 @@ func TestEnforceOwnershipRejectsDeleteSystem(t *testing.T) {
 	}
 }
 
+func TestRejectForgedSystemOnPut(t *testing.T) {
+	s := &Service{}
+	doc := SchemaDocument{Entities: map[string]EntityDefinition{
+		"user": {
+			ID: uuid.Must(uuid.NewV7()), Key: "user", DisplayName: "User", Origin: OriginSystem,
+			Fields: map[string]FieldDefinition{}, Relationships: map[string]RelationshipDefinition{},
+		},
+	}}
+	if err := s.rejectForgedOwnership(doc); !errors.Is(err, ErrProtected) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestEnforceOwnershipAllowsCustomMutation(t *testing.T) {
 	s := &Service{}
 	now := time.Now().UTC()

@@ -1,10 +1,8 @@
 package schema
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
-	"uuid"
 )
 
 const (
@@ -130,7 +128,7 @@ func validateComparison(node *PolicyNode, entity EntityDefinition, op string) er
 			return fmt.Errorf("%w: in values limit exceeded", ErrInvalidPolicy)
 		}
 		for _, v := range node.Values {
-			if err := assertLiteralType(v, leftType); err != nil {
+			if err := assertLiteralTypeStrict(v, leftType); err != nil {
 				return fmt.Errorf("%w: in value type mismatch", ErrInvalidPolicy)
 			}
 		}
@@ -139,61 +137,9 @@ func validateComparison(node *PolicyNode, entity EntityDefinition, op string) er
 		if node.Value == nil {
 			return fmt.Errorf("%w: comparison requires value", ErrInvalidPolicy)
 		}
-		if err := assertLiteralType(node.Value, leftType); err != nil {
+		if err := assertLiteralTypeStrict(node.Value, leftType); err != nil {
 			return fmt.Errorf("%w: value type mismatch", ErrInvalidPolicy)
 		}
 		return nil
 	}
-}
-
-func assertLiteralType(v any, t ScalarType) error {
-	switch t {
-	case TypeString, TypeDate, TypeDateTime, TypeUUID:
-		s, ok := v.(string)
-		if !ok {
-			return ErrInvalidPolicy
-		}
-		if t == TypeUUID {
-			if _, err := uuidParse(s); err != nil {
-				return ErrInvalidPolicy
-			}
-		}
-		return nil
-	case TypeInteger:
-		switch v.(type) {
-		case float64:
-			f := v.(float64)
-			if f != float64(int64(f)) {
-				return ErrInvalidPolicy
-			}
-			return nil
-		case json.Number:
-			_, err := v.(json.Number).Int64()
-			return err
-		default:
-			return ErrInvalidPolicy
-		}
-	case TypeNumber:
-		switch v.(type) {
-		case float64:
-			return nil
-		case json.Number:
-			_, err := v.(json.Number).Float64()
-			return err
-		default:
-			return ErrInvalidPolicy
-		}
-	case TypeBoolean:
-		_, ok := v.(bool)
-		if !ok {
-			return ErrInvalidPolicy
-		}
-		return nil
-	default:
-		return ErrInvalidPolicy
-	}
-}
-
-func uuidParse(s string) (uuid.UUID, error) {
-	return uuid.Parse(s)
 }

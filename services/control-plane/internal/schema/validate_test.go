@@ -39,6 +39,33 @@ func TestValidateDocumentValidCustomEntity(t *testing.T) {
 	}
 }
 
+func TestCanonicalizePersistsNormalizedKeys(t *testing.T) {
+	now := time.Now().UTC()
+	doc := SchemaDocument{Entities: map[string]EntityDefinition{
+		"Order": {
+			ID: uuid.Must(uuid.NewV7()), Key: "Order", DisplayName: "Order", Origin: OriginCustom,
+			Fields: map[string]FieldDefinition{
+				"Title": {ID: uuid.Must(uuid.NewV7()), Key: "Title", DisplayName: "Title", Type: TypeString, Origin: OriginCustom, CreatedAt: now, UpdatedAt: now},
+			},
+			Relationships: map[string]RelationshipDefinition{},
+			CreatedAt:     now, UpdatedAt: now,
+		},
+	}}
+	out, err := CanonicalizeDocument(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := out.Entities["order"]; !ok {
+		t.Fatal("entity key not canonical")
+	}
+	if out.Entities["order"].Key != "order" {
+		t.Fatal("entity.Key not canonical")
+	}
+	if _, ok := out.Entities["order"].Fields["title"]; !ok {
+		t.Fatal("field key not canonical")
+	}
+}
+
 func TestValidateDocumentReservedEntityKey(t *testing.T) {
 	now := time.Now().UTC()
 	doc := SchemaDocument{
@@ -53,6 +80,23 @@ func TestValidateDocumentReservedEntityKey(t *testing.T) {
 	}
 	if err := ValidateDocument(doc); !errors.Is(err, ErrReservedKey) {
 		t.Fatalf("want reserved, got %v", err)
+	}
+}
+
+func TestDefaultDateInvalid(t *testing.T) {
+	now := time.Now().UTC()
+	doc := SchemaDocument{Entities: map[string]EntityDefinition{
+		"order": {
+			ID: uuid.Must(uuid.NewV7()), Key: "order", DisplayName: "Order", Origin: OriginCustom,
+			Fields: map[string]FieldDefinition{
+				"shipped": {ID: uuid.Must(uuid.NewV7()), Key: "shipped", DisplayName: "Shipped", Type: TypeDate, Default: json.RawMessage(`"not-a-date"`), Origin: OriginCustom, CreatedAt: now, UpdatedAt: now},
+			},
+			Relationships: map[string]RelationshipDefinition{},
+			CreatedAt:     now, UpdatedAt: now,
+		},
+	}}
+	if err := ValidateDocument(doc); err == nil {
+		t.Fatal("expected invalid date default")
 	}
 }
 

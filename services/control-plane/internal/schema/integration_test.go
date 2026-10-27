@@ -125,8 +125,18 @@ VALUES ($1, $2, 'development', 'development', 'active')`, envID, projectID); err
 	if err != nil {
 		t.Fatalf("relationship: %v", err)
 	}
+	d5, err := svc.PutSchema(ctx, principal, orgID, projectID, envID, PutSchemaInput{
+		ExpectedRevision: d4.Revision,
+		Document:         d4.Document,
+	})
+	if err != nil {
+		t.Fatalf("put schema through service: %v", err)
+	}
+	if d5.Revision != d4.Revision+1 {
+		t.Fatalf("revision after put schema=%d, want %d", d5.Revision, d4.Revision+1)
+	}
 
-	_, err = svc.UpsertCustomEntity(ctx, principal, orgID, projectID, envID, d4.Revision, EntityMutationInput{
+	_, err = svc.UpsertCustomEntity(ctx, principal, orgID, projectID, envID, d5.Revision, EntityMutationInput{
 		Key: "system", DisplayName: "Nope",
 	})
 	if !errors.Is(err, ErrReservedKey) && !errors.Is(err, ErrInvalidInput) {
@@ -145,7 +155,7 @@ VALUES ($1, $2, 'viewer', 'active')`, orgID, viewerID); err != nil {
 	if _, err := svc.GetSchema(ctx, viewer, orgID, projectID, envID); err != nil {
 		t.Fatalf("viewer read: %v", err)
 	}
-	if _, err := svc.UpsertCustomEntity(ctx, viewer, orgID, projectID, envID, d4.Revision, EntityMutationInput{
+	if _, err := svc.UpsertCustomEntity(ctx, viewer, orgID, projectID, envID, d5.Revision, EntityMutationInput{
 		Key: "blocked", DisplayName: "Blocked",
 	}); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("viewer mutate: %v", err)
