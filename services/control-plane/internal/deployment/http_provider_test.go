@@ -120,3 +120,57 @@ func TestHTTPProviderTreatsPreAcceptanceRateLimitAsRetryable(t *testing.T) {
 		t.Fatalf("expected retryable result, got %+v", result)
 	}
 }
+
+
+func TestHTTPProviderRejectsSuccessWithMismatchedIdentityAsAmbiguous(t *testing.T) {
+	deploymentID := uuid.New()
+	environmentID := uuid.New()
+	versionID := uuid.New()
+	requestID := "dep-" + deploymentID.String()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"outcome": "success",
+			"deployment_id": uuid.New(),
+			"environment_id": environmentID,
+			"configuration_version_id": versionID,
+			"provider_request_id": requestID,
+			"readiness_probe_passed": true,
+			"readiness_probe_id": "probe-1",
+			"readiness_observed_at": time.Now().UTC(),
+			"url": "https://app.runtime.example",
+		})
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
+	result, err := provider.Provision(t.Context(), ProvisionRequest{
+		DeploymentID: deploymentID,
+		EnvironmentID: environmentID,
+		ConfigurationVersionID: versionID,
+		ProviderRequestID: requestID,
+		TargetMode: TargetModeShared,
+	})
+	if err != nil {
+		t.Fatalf("Provision returned error: %v", err)
+	}
+	if result.Outcome != OutcomeAmbiguous {
+		t.Fatalf("expected mismatched response to be ambiguous, got %+v", result)
+	}
+}
+
+func TestHTTPProviderRejectsUnknownOutcomeAsAmbiguous(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"outcome": "ready-ish",
+			"provider_request_id": "dep-unknown",
+		})
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
+	result, err := provider.Provision(t.Context(), ProvisionRequest{ProviderRequestID: "dep-unknown"})
+	if err != nil {
+		t.Fatalf("Provision returned error: %v", err)
+	}
+	if result.Outcome != OutcomeAmbiguous {
+		t.Fatalf("expected unknown outcome to be ambiguous, got %+v", result)
+	}
+}
