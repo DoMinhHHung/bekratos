@@ -113,7 +113,7 @@ where
     if body.len() > MAX_MESSAGE_BYTES
         || subject.is_empty()
         || subject.len() > 998
-        || subject.contains(['\r', '\n'])
+        || (subject.contains('\r') || subject.contains('\n'))
         || !subject.is_ascii()
     {
         return Err(AppError::Unavailable);
@@ -179,7 +179,7 @@ async fn command<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if command.contains(['\r', '\n']) || command.len() > MAX_RESPONSE_LINE_BYTES {
+    if (command.contains('\r') || command.contains('\n')) || command.len() > MAX_RESPONSE_LINE_BYTES {
         return Err(AppError::Unavailable);
     }
     stream
@@ -278,7 +278,7 @@ fn encode_body(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{encode_body, smtp_exchange, validate_mailbox};
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     async fn read_line(stream: &mut BufReader<tokio::io::DuplexStream>) -> String {
         let mut line = String::new();
@@ -383,9 +383,12 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_malformed_and_oversized_smtp_responses() {
-        for response in ["not an SMTP response\r\n", &format!("220 {}\r\n", "x".repeat(5000))] {
+        let responses = vec![
+            "not an SMTP response\r\n".to_string(),
+            format!("220 {}\r\n", "x".repeat(5000)),
+        ];
+        for response in responses {
             let (client, mut server) = tokio::io::duplex(16 * 1024);
-            let response = response.to_string();
             let server_task = tokio::spawn(async move {
                 server.write_all(response.as_bytes()).await.unwrap();
                 server.flush().await.unwrap();
