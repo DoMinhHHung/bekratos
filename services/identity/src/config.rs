@@ -147,14 +147,18 @@ impl Config {
             .unwrap_or_else(|_| "development".to_string())
             .to_ascii_lowercase();
         if !matches!(app_env.as_str(), "development" | "test" | "production") {
-            return Err(AppError::config("APP_ENV must be development, test, or production"));
+            return Err(AppError::config(
+                "APP_ENV must be development, test, or production",
+            ));
         }
 
         let mail_provider = env::var("MAIL_PROVIDER")
             .unwrap_or_else(|_| "console".to_string())
             .to_ascii_lowercase();
         if !matches!(mail_provider.as_str(), "console" | "none" | "resend") {
-            return Err(AppError::config("MAIL_PROVIDER must be console, none, or resend"));
+            return Err(AppError::config(
+                "MAIL_PROVIDER must be console, none, or resend",
+            ));
         }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
         let mail_api_key = env::var("MAIL_API_KEY").unwrap_or_default();
@@ -163,16 +167,22 @@ impl Config {
             .parse()
             .map_err(|_| AppError::config("MAIL_TIMEOUT_SECS must be a valid u64"))?;
         if mail_timeout_secs == 0 || mail_timeout_secs > 60 {
-            return Err(AppError::config("MAIL_TIMEOUT_SECS must be between 1 and 60"));
+            return Err(AppError::config(
+                "MAIL_TIMEOUT_SECS must be between 1 and 60",
+            ));
         }
         if mail_provider == "resend" && mail_api_key.trim().is_empty() {
-            return Err(AppError::config("MAIL_API_KEY is required when MAIL_PROVIDER=resend"));
+            return Err(AppError::config(
+                "MAIL_API_KEY is required when MAIL_PROVIDER=resend",
+            ));
         }
         if app_env == "production" && mail_provider != "resend" {
             return Err(AppError::config("production requires MAIL_PROVIDER=resend"));
         }
         if app_env == "production" && !app_public_base_url.starts_with("https://") {
-            return Err(AppError::config("production requires HTTPS APP_PUBLIC_BASE_URL"));
+            return Err(AppError::config(
+                "production requires HTTPS APP_PUBLIC_BASE_URL",
+            ));
         }
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
