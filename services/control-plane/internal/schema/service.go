@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -54,6 +55,12 @@ func (s *Service) requireActiveChain(ctx context.Context, orgID, projectID, envI
 	return nil
 }
 
+func (s *Service) mutationAuth(orgID, projectID, envID, actorID uuid.UUID) MutationAuth {
+	return MutationAuth{
+		OrgID: orgID, ProjectID: projectID, EnvID: envID, ActorID: actorID,
+	}
+}
+
 func (s *Service) GetSchema(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID) (Draft, error) {
 	m, err := s.requireMembership(ctx, orgID, principal.UserID)
 	if err != nil {
@@ -79,30 +86,32 @@ func (s *Service) PutSchema(ctx context.Context, principal auth.Principal, orgID
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
-
-	if in.Document.Entities == nil {
-		in.Document.Entities = map[string]EntityDefinition{}
+	if in.ExpectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
 	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
 	}
-	expected := current.Revision
-	if in.ExpectedRevision != nil {
-		expected = *in.ExpectedRevision
-	}
 
-	if err := s.enforceOwnershipInvariants(current.Document, in.Document); err != nil {
+	doc, err := CanonicalizeDocument(in.Document)
+	if err != nil {
 		return Draft{}, err
 	}
-	if err := ValidateDocument(in.Document); err != nil {
+	if err := s.rejectForgedOwnership(doc); err != nil {
+		return Draft{}, err
+	}
+	if err := s.enforceOwnershipInvariants(current.Document, doc); err != nil {
+		return Draft{}, err
+	}
+	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
 
 	return s.repo.SaveDraft(
-		ctx, envID, expected, in.Document,
-		principal.UserID, requestid.FromContext(ctx), "schema.draft.put",
+		ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		in.ExpectedRevision, doc, requestid.FromContext(ctx), "schema.draft.put",
 	)
 }
 
@@ -117,13 +126,13 @@ func (s *Service) UpsertCustomEntity(ctx context.Context, principal auth.Princip
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	key := normalizeKey(in.Key)
@@ -143,6 +152,10 @@ func (s *Service) UpsertCustomEntity(ctx context.Context, principal auth.Princip
 			return Draft{}, ErrProtected
 		}
 		existing.DisplayName = display
+		existing.Key = key
+		existing.Origin = OriginCustom
+		existing.ModuleSlug = ""
+		existing.ReleaseID = nil
 		existing.UpdatedAt = now
 		doc.Entities[key] = existing
 	} else {
@@ -159,10 +172,15 @@ func (s *Service) UpsertCustomEntity(ctx context.Context, principal auth.Princip
 		}
 	}
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.entity.upsert")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.entity.upsert")
 }
 
 func (s *Service) DeleteCustomEntity(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, expectedRevision int64, entityKey string) (Draft, error) {
@@ -176,13 +194,13 @@ func (s *Service) DeleteCustomEntity(ctx context.Context, principal auth.Princip
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	key := normalizeKey(entityKey)
@@ -199,16 +217,24 @@ func (s *Service) DeleteCustomEntity(ctx context.Context, principal auth.Princip
 	for ek, e := range doc.Entities {
 		for rk, rel := range e.Relationships {
 			if normalizeKey(rel.TargetEntity) == key {
+				if rel.Origin != OriginCustom || rel.Protected {
+					return Draft{}, ErrProtected
+				}
 				delete(e.Relationships, rk)
 			}
 		}
 		doc.Entities[ek] = e
 	}
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.entity.delete")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.entity.delete")
 }
 
 func (s *Service) UpsertCustomField(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, expectedRevision int64, entityKey string, in FieldMutationInput) (Draft, error) {
@@ -222,13 +248,13 @@ func (s *Service) UpsertCustomField(ctx context.Context, principal auth.Principa
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	ek := normalizeKey(entityKey)
@@ -253,12 +279,16 @@ func (s *Service) UpsertCustomField(ctx context.Context, principal auth.Principa
 		if existing.Origin != OriginCustom || existing.Protected {
 			return Draft{}, ErrProtected
 		}
+		existing.Key = fk
 		existing.DisplayName = strings.TrimSpace(in.DisplayName)
 		existing.Type = in.Type
 		existing.Required = in.Required
 		existing.Nullable = in.Nullable
 		existing.Default = in.Default
 		existing.Constraints = in.Constraints
+		existing.Origin = OriginCustom
+		existing.ModuleSlug = ""
+		existing.ReleaseID = nil
 		existing.UpdatedAt = now
 		ent.Fields[fk] = existing
 	} else {
@@ -280,10 +310,15 @@ func (s *Service) UpsertCustomField(ctx context.Context, principal auth.Principa
 	ent.UpdatedAt = now
 	doc.Entities[ek] = ent
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.field.upsert")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.field.upsert")
 }
 
 func (s *Service) DeleteCustomField(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, expectedRevision int64, entityKey, fieldKey string) (Draft, error) {
@@ -297,13 +332,13 @@ func (s *Service) DeleteCustomField(ctx context.Context, principal auth.Principa
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	ek := normalizeKey(entityKey)
@@ -326,10 +361,15 @@ func (s *Service) DeleteCustomField(ctx context.Context, principal auth.Principa
 	ent.UpdatedAt = time.Now().UTC()
 	doc.Entities[ek] = ent
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.field.delete")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.field.delete")
 }
 
 func (s *Service) UpsertCustomRelationship(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, expectedRevision int64, entityKey string, in RelationshipMutationInput) (Draft, error) {
@@ -343,13 +383,13 @@ func (s *Service) UpsertCustomRelationship(ctx context.Context, principal auth.P
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	ek := normalizeKey(entityKey)
@@ -374,11 +414,15 @@ func (s *Service) UpsertCustomRelationship(ctx context.Context, principal auth.P
 		if existing.Origin != OriginCustom || existing.Protected {
 			return Draft{}, ErrProtected
 		}
+		existing.Key = rk
 		existing.SourceEntity = ek
 		existing.TargetEntity = normalizeKey(in.TargetEntity)
 		existing.Cardinality = in.Cardinality
 		existing.Required = in.Required
 		existing.DeleteBehavior = in.DeleteBehavior
+		existing.Origin = OriginCustom
+		existing.ModuleSlug = ""
+		existing.ReleaseID = nil
 		existing.UpdatedAt = now
 		ent.Relationships[rk] = existing
 	} else {
@@ -399,10 +443,15 @@ func (s *Service) UpsertCustomRelationship(ctx context.Context, principal auth.P
 	ent.UpdatedAt = now
 	doc.Entities[ek] = ent
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.relationship.upsert")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.relationship.upsert")
 }
 
 func (s *Service) DeleteCustomRelationship(ctx context.Context, principal auth.Principal, orgID, projectID, envID uuid.UUID, expectedRevision int64, entityKey, relKey string) (Draft, error) {
@@ -416,13 +465,13 @@ func (s *Service) DeleteCustomRelationship(ctx context.Context, principal auth.P
 	if err := s.requireActiveChain(ctx, orgID, projectID, envID); err != nil {
 		return Draft{}, err
 	}
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
 
 	current, err := s.repo.GetDraft(ctx, envID)
 	if err != nil {
 		return Draft{}, err
-	}
-	if current.Revision != expectedRevision {
-		return Draft{}, ErrConflictRevision
 	}
 
 	ek := normalizeKey(entityKey)
@@ -445,10 +494,43 @@ func (s *Service) DeleteCustomRelationship(ctx context.Context, principal auth.P
 	ent.UpdatedAt = time.Now().UTC()
 	doc.Entities[ek] = ent
 
+	doc, err = CanonicalizeDocument(doc)
+	if err != nil {
+		return Draft{}, err
+	}
 	if err := ValidateDocument(doc); err != nil {
 		return Draft{}, err
 	}
-	return s.repo.SaveDraft(ctx, envID, expectedRevision, doc, principal.UserID, requestid.FromContext(ctx), "schema.relationship.delete")
+	return s.repo.SaveDraft(ctx, s.mutationAuth(orgID, projectID, envID, principal.UserID),
+		expectedRevision, doc, requestid.FromContext(ctx), "schema.relationship.delete")
+}
+
+func (s *Service) rejectForgedOwnership(doc SchemaDocument) error {
+	for _, ent := range doc.Entities {
+		if ent.Origin == OriginSystem || ent.Origin == OriginModule {
+			return ErrProtected
+		}
+		if ent.Origin != OriginCustom {
+			return ErrInvalidInput
+		}
+		for _, f := range ent.Fields {
+			if f.Origin == OriginSystem || f.Origin == OriginModule {
+				return ErrProtected
+			}
+			if f.Origin != OriginCustom {
+				return ErrInvalidInput
+			}
+		}
+		for _, r := range ent.Relationships {
+			if r.Origin == OriginSystem || r.Origin == OriginModule {
+				return ErrProtected
+			}
+			if r.Origin != OriginCustom {
+				return ErrInvalidInput
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) enforceOwnershipInvariants(prev, next SchemaDocument) error {
@@ -463,11 +545,14 @@ func (s *Service) enforceOwnershipInvariants(prev, next SchemaDocument) error {
 		if prevEnt.Origin != nextEnt.Origin {
 			return ErrProtected
 		}
-		if prevEnt.Protected && !equalEntityCore(prevEnt, nextEnt) {
-			return ErrProtected
-		}
-		if prevEnt.Origin == OriginSystem || prevEnt.Origin == OriginModule {
+		if prevEnt.Origin == OriginSystem || prevEnt.Origin == OriginModule || prevEnt.Protected {
+			if !equalEntityCore(prevEnt, nextEnt) {
+				return ErrProtected
+			}
 			if err := enforceProtectedFields(prevEnt, nextEnt); err != nil {
+				return err
+			}
+			if err := enforceProtectedRelationships(prevEnt, nextEnt); err != nil {
 				return err
 			}
 		}
@@ -486,7 +571,8 @@ func equalEntityCore(a, b EntityDefinition) bool {
 	return a.Origin == b.Origin &&
 		a.ModuleSlug == b.ModuleSlug &&
 		uuidPtrEqual(a.ReleaseID, b.ReleaseID) &&
-		a.Protected == b.Protected
+		a.Protected == b.Protected &&
+		a.Key == b.Key
 }
 
 func uuidPtrEqual(a, b *uuid.UUID) bool {
@@ -509,11 +595,34 @@ func enforceProtectedFields(prev, next EntityDefinition) error {
 			continue
 		}
 		if pf.Protected || pf.Origin != OriginCustom {
-			if pf.Type != nf.Type || pf.Origin != nf.Origin || pf.Protected != nf.Protected {
+			if pf.Type != nf.Type ||
+				pf.Origin != nf.Origin ||
+				pf.Protected != nf.Protected ||
+				pf.Required != nf.Required ||
+				pf.Nullable != nf.Nullable ||
+				!rawEqual(pf.Default, nf.Default) ||
+				!constraintsEqual(pf.Constraints, nf.Constraints) ||
+				pf.ModuleSlug != nf.ModuleSlug ||
+				!uuidPtrEqual(pf.ReleaseID, nf.ReleaseID) {
 				return ErrProtected
 			}
 		}
 	}
+	for fk, nf := range next.Fields {
+		if _, ok := prev.Fields[fk]; ok {
+			continue
+		}
+		if prev.Origin == OriginSystem {
+			return ErrProtected
+		}
+		if nf.Origin != OriginCustom {
+			return ErrProtected
+		}
+	}
+	return nil
+}
+
+func enforceProtectedRelationships(prev, next EntityDefinition) error {
 	for rk, pr := range prev.Relationships {
 		nr, ok := next.Relationships[rk]
 		if !ok {
@@ -523,12 +632,71 @@ func enforceProtectedFields(prev, next EntityDefinition) error {
 			continue
 		}
 		if pr.Protected || pr.Origin != OriginCustom {
-			if pr.Cardinality != nr.Cardinality || pr.Origin != nr.Origin || pr.Protected != nr.Protected {
+			if pr.Cardinality != nr.Cardinality ||
+				pr.Origin != nr.Origin ||
+				pr.Protected != nr.Protected ||
+				pr.Required != nr.Required ||
+				pr.DeleteBehavior != nr.DeleteBehavior ||
+				normalizeKey(pr.TargetEntity) != normalizeKey(nr.TargetEntity) ||
+				normalizeKey(pr.SourceEntity) != normalizeKey(nr.SourceEntity) ||
+				pr.ModuleSlug != nr.ModuleSlug ||
+				!uuidPtrEqual(pr.ReleaseID, nr.ReleaseID) {
 				return ErrProtected
 			}
 		}
 	}
+	for rk, nr := range next.Relationships {
+		if _, ok := prev.Relationships[rk]; ok {
+			continue
+		}
+		if prev.Origin == OriginSystem {
+			return ErrProtected
+		}
+		if nr.Origin != OriginCustom {
+			return ErrProtected
+		}
+	}
 	return nil
+}
+
+func rawEqual(a, b json.RawMessage) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	return string(a) == string(b)
+}
+
+func constraintsEqual(a, b *FieldConstraints) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return intPtrEqual(a.MinLength, b.MinLength) &&
+		intPtrEqual(a.MaxLength, b.MaxLength) &&
+		floatPtrEqual(a.Min, b.Min) &&
+		floatPtrEqual(a.Max, b.Max)
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func floatPtrEqual(a, b *float64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func cloneDocument(doc SchemaDocument) SchemaDocument {

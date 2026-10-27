@@ -38,12 +38,12 @@ type putSchemaRequest struct {
 }
 
 type entityRequest struct {
-	ExpectedRevision int64  `json:"expected_revision"`
+	ExpectedRevision *int64 `json:"expected_revision"`
 	DisplayName      string `json:"display_name"`
 }
 
 type fieldRequest struct {
-	ExpectedRevision int64             `json:"expected_revision"`
+	ExpectedRevision *int64            `json:"expected_revision"`
 	DisplayName      string            `json:"display_name"`
 	Type             string            `json:"type"`
 	Required         bool              `json:"required"`
@@ -53,7 +53,7 @@ type fieldRequest struct {
 }
 
 type relationshipRequest struct {
-	ExpectedRevision int64  `json:"expected_revision"`
+	ExpectedRevision *int64 `json:"expected_revision"`
 	TargetEntity     string `json:"target_entity"`
 	Cardinality      string `json:"cardinality"`
 	Required         bool   `json:"required"`
@@ -66,6 +66,16 @@ type draftResponse struct {
 	Document      SchemaDocument `json:"document"`
 	CreatedAt     string         `json:"created_at,omitempty"`
 	UpdatedAt     string         `json:"updated_at,omitempty"`
+}
+
+func requireExpectedRevision(ptr *int64) (int64, error) {
+	if ptr == nil {
+		return 0, ErrInvalidInput
+	}
+	if *ptr < 0 {
+		return 0, ErrInvalidInput
+	}
+	return *ptr, nil
 }
 
 func (h *Handlers) getSchema(w http.ResponseWriter, r *http.Request) {
@@ -91,8 +101,13 @@ func (h *Handlers) putSchema(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
+	rev, err := requireExpectedRevision(req.ExpectedRevision)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_input", "expected_revision required")
+		return
+	}
 	d, err := h.svc.PutSchema(r.Context(), principal, orgID, projectID, envID, PutSchemaInput{
-		ExpectedRevision: req.ExpectedRevision,
+		ExpectedRevision: rev,
 		Document:         req.Document,
 	})
 	if err != nil {
@@ -113,7 +128,12 @@ func (h *Handlers) upsertEntity(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
-	d, err := h.svc.UpsertCustomEntity(r.Context(), principal, orgID, projectID, envID, req.ExpectedRevision, EntityMutationInput{
+	rev, err := requireExpectedRevision(req.ExpectedRevision)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_input", "expected_revision required")
+		return
+	}
+	d, err := h.svc.UpsertCustomEntity(r.Context(), principal, orgID, projectID, envID, rev, EntityMutationInput{
 		Key: entityKey, DisplayName: req.DisplayName,
 	})
 	if err != nil {
@@ -154,7 +174,12 @@ func (h *Handlers) upsertField(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
-	d, err := h.svc.UpsertCustomField(r.Context(), principal, orgID, projectID, envID, req.ExpectedRevision, entityKey, FieldMutationInput{
+	rev, err := requireExpectedRevision(req.ExpectedRevision)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_input", "expected_revision required")
+		return
+	}
+	d, err := h.svc.UpsertCustomField(r.Context(), principal, orgID, projectID, envID, rev, entityKey, FieldMutationInput{
 		Key: fieldKey, DisplayName: req.DisplayName, Type: ScalarType(req.Type),
 		Required: req.Required, Nullable: req.Nullable, Default: req.Default, Constraints: req.Constraints,
 	})
@@ -197,7 +222,12 @@ func (h *Handlers) upsertRelationship(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
-	d, err := h.svc.UpsertCustomRelationship(r.Context(), principal, orgID, projectID, envID, req.ExpectedRevision, entityKey, RelationshipMutationInput{
+	rev, err := requireExpectedRevision(req.ExpectedRevision)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid_input", "expected_revision required")
+		return
+	}
+	d, err := h.svc.UpsertCustomRelationship(r.Context(), principal, orgID, projectID, envID, rev, entityKey, RelationshipMutationInput{
 		Key: relKey, SourceEntity: entityKey, TargetEntity: req.TargetEntity,
 		Cardinality: Cardinality(req.Cardinality), Required: req.Required,
 		DeleteBehavior: DeleteBehavior(req.DeleteBehavior),
@@ -258,7 +288,11 @@ func parseExpectedRevision(r *http.Request) (int64, error) {
 	if q == "" {
 		return 0, ErrInvalidInput
 	}
-	return strconv.ParseInt(q, 10, 64)
+	v, err := strconv.ParseInt(q, 10, 64)
+	if err != nil || v < 0 {
+		return 0, ErrInvalidInput
+	}
+	return v, nil
 }
 
 func toDraftResponse(d Draft) draftResponse {

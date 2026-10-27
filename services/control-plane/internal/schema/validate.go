@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -39,35 +40,89 @@ func normalizeKey(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-func ValidateDocument(doc SchemaDocument) error {
+func CanonicalizeDocument(doc SchemaDocument) (SchemaDocument, error) {
 	if doc.Entities == nil {
-		doc.Entities = map[string]EntityDefinition{}
+		return SchemaDocument{Entities: map[string]EntityDefinition{}}, nil
 	}
+	out := SchemaDocument{Entities: make(map[string]EntityDefinition, len(doc.Entities))}
+	for rawKey, ent := range doc.Entities {
+		key := normalizeKey(rawKey)
+		entKey := normalizeKey(ent.Key)
+		if entKey == "" {
+			entKey = key
+		}
+		if key != entKey {
+			return SchemaDocument{}, fmt.Errorf("%w: entity map key %q does not match key %q", ErrValidation, rawKey, ent.Key)
+		}
+		if _, exists := out.Entities[key]; exists {
+			return SchemaDocument{}, fmt.Errorf("%w: duplicate entity key %q after normalization", ErrDuplicateKey, key)
+		}
+		ent.Key = key
+
+		fields := map[string]FieldDefinition{}
+		for rawFK, f := range ent.Fields {
+			fk := normalizeKey(rawFK)
+			fKey := normalizeKey(f.Key)
+			if fKey == "" {
+				fKey = fk
+			}
+			if fk != fKey {
+				return SchemaDocument{}, fmt.Errorf("%w: field map key mismatch", ErrValidation)
+			}
+			if _, exists := fields[fk]; exists {
+				return SchemaDocument{}, fmt.Errorf("%w: duplicate field key %q", ErrDuplicateKey, fk)
+			}
+			f.Key = fk
+			fields[fk] = f
+		}
+		ent.Fields = fields
+
+		rels := map[string]RelationshipDefinition{}
+		for rawRK, r := range ent.Relationships {
+			rk := normalizeKey(rawRK)
+			rKey := normalizeKey(r.Key)
+			if rKey == "" {
+				rKey = rk
+			}
+			if rk != rKey {
+				return SchemaDocument{}, fmt.Errorf("%w: relationship map key mismatch", ErrValidation)
+			}
+			if _, exists := rels[rk]; exists {
+				return SchemaDocument{}, fmt.Errorf("%w: duplicate relationship key %q", ErrDuplicateKey, rk)
+			}
+			r.Key = rk
+			r.SourceEntity = normalizeKey(r.SourceEntity)
+			r.TargetEntity = normalizeKey(r.TargetEntity)
+			rels[rk] = r
+		}
+		ent.Relationships = rels
+		out.Entities[key] = ent
+	}
+	return out, nil
+}
+
+func ValidateDocument(doc SchemaDocument) error {
+	canonical, err := CanonicalizeDocument(doc)
+	if err != nil {
+		return err
+	}
+	doc = canonical
 	if len(doc.Entities) > maxEntitiesPerSchema {
 		return fmt.Errorf("%w: too many entities", ErrValidation)
 	}
 
-	normalized := make(map[string]EntityDefinition, len(doc.Entities))
-	for rawKey, ent := range doc.Entities {
-		key := normalizeKey(rawKey)
-		if key != normalizeKey(ent.Key) {
-			return fmt.Errorf("%w: entity map key mismatch for %q", ErrValidation, rawKey)
-		}
+	for key, ent := range doc.Entities {
 		if err := validateEntityKey(key); err != nil {
 			return err
-		}
-		if _, exists := normalized[key]; exists {
-			return fmt.Errorf("%w: duplicate entity key %q", ErrDuplicateKey, key)
 		}
 		if err := validateEntity(ent, key); err != nil {
 			return err
 		}
-		normalized[key] = ent
 	}
 
-	for key, ent := range normalized {
+	for key, ent := range doc.Entities {
 		for relKey, rel := range ent.Relationships {
-			if err := validateRelationship(rel, key, relKey, normalized); err != nil {
+			if err := validateRelationship(rel, key, relKey, doc.Entities); err != nil {
 				return err
 			}
 		}
@@ -117,8 +172,10 @@ func validateEntity(ent EntityDefinition, key string) error {
 			return fmt.Errorf("%w: module entity requires module_slug and release_id", ErrValidation)
 		}
 	}
-	if ent.Origin == OriginSystem {
-		ent.Protected = true
+	if ent.Origin == OriginCustom {
+		if ent.ModuleSlug != "" || ent.ReleaseID != nil {
+			return fmt.Errorf("%w: custom entity must not carry module provenance", ErrValidation)
+		}
 	}
 	if ent.Fields == nil {
 		ent.Fields = map[string]FieldDefinition{}
@@ -126,16 +183,7 @@ func validateEntity(ent EntityDefinition, key string) error {
 	if len(ent.Fields) > maxFieldsPerEntity {
 		return fmt.Errorf("%w: too many fields on entity %q", ErrValidation, key)
 	}
-	seenFields := map[string]struct{}{}
-	for rawFK, f := range ent.Fields {
-		fk := normalizeKey(rawFK)
-		if fk != normalizeKey(f.Key) {
-			return fmt.Errorf("%w: field map key mismatch", ErrValidation)
-		}
-		if _, ok := seenFields[fk]; ok {
-			return fmt.Errorf("%w: duplicate field key %q", ErrDuplicateKey, fk)
-		}
-		seenFields[fk] = struct{}{}
+	for fk, f := range ent.Fields {
 		if err := validateField(f, fk, ent.Origin); err != nil {
 			return err
 		}
@@ -145,17 +193,6 @@ func validateEntity(ent EntityDefinition, key string) error {
 	}
 	if len(ent.Relationships) > maxRelationshipsPerEnt {
 		return fmt.Errorf("%w: too many relationships on entity %q", ErrValidation, key)
-	}
-	seenRels := map[string]struct{}{}
-	for rawRK, r := range ent.Relationships {
-		rk := normalizeKey(rawRK)
-		if rk != normalizeKey(r.Key) {
-			return fmt.Errorf("%w: relationship map key mismatch", ErrValidation)
-		}
-		if _, ok := seenRels[rk]; ok {
-			return fmt.Errorf("%w: duplicate relationship key %q", ErrDuplicateKey, rk)
-		}
-		seenRels[rk] = struct{}{}
 	}
 	return nil
 }
@@ -205,8 +242,8 @@ func validateField(f FieldDefinition, key string, entityOrigin Origin) error {
 	default:
 		return fmt.Errorf("%w: invalid field origin", ErrInvalidInput)
 	}
-	if f.Origin == OriginSystem {
-		f.Protected = true
+	if f.Origin == OriginCustom && (f.ModuleSlug != "" || f.ReleaseID != nil) {
+		return fmt.Errorf("%w: custom field must not carry module provenance", ErrValidation)
 	}
 	if entityOrigin == OriginSystem && f.Origin != OriginSystem {
 		return fmt.Errorf("%w: system entity cannot host non-system fields", ErrValidation)
@@ -228,7 +265,7 @@ func validateDefault(raw json.RawMessage, t ScalarType) error {
 	if err := dec.Decode(&extra); err == nil {
 		return fmt.Errorf("trailing data in default")
 	}
-	return assertLiteralType(v, t)
+	return assertLiteralTypeStrict(v, t)
 }
 
 func isJSONNull(raw json.RawMessage) bool {
@@ -303,7 +340,84 @@ func validateRelationship(rel RelationshipDefinition, sourceKey, relKey string, 
 	default:
 		return fmt.Errorf("%w: invalid relationship origin", ErrInvalidInput)
 	}
+	if rel.Origin == OriginCustom && (rel.ModuleSlug != "" || rel.ReleaseID != nil) {
+		return fmt.Errorf("%w: custom relationship must not carry module provenance", ErrValidation)
+	}
 	return nil
+}
+
+func assertLiteralTypeStrict(v any, t ScalarType) error {
+	switch t {
+	case TypeString:
+		s, ok := v.(string)
+		if !ok {
+			return ErrInvalidPolicy
+		}
+		if utf8.RuneCountInString(s) > maxStringDefaultLen {
+			return fmt.Errorf("string default too long")
+		}
+		return nil
+	case TypeDate:
+		s, ok := v.(string)
+		if !ok {
+			return ErrInvalidPolicy
+		}
+		if _, err := time.Parse("2006-01-02", s); err != nil {
+			return fmt.Errorf("invalid date")
+		}
+		return nil
+	case TypeDateTime:
+		s, ok := v.(string)
+		if !ok {
+			return ErrInvalidPolicy
+		}
+		if _, err := time.Parse(time.RFC3339Nano, s); err != nil {
+			if _, err2 := time.Parse(time.RFC3339, s); err2 != nil {
+				return fmt.Errorf("invalid datetime")
+			}
+		}
+		return nil
+	case TypeUUID:
+		s, ok := v.(string)
+		if !ok {
+			return ErrInvalidPolicy
+		}
+		if _, err := uuid.Parse(s); err != nil {
+			return fmt.Errorf("invalid uuid")
+		}
+		return nil
+	case TypeInteger:
+		switch n := v.(type) {
+		case float64:
+			if n != float64(int64(n)) {
+				return ErrInvalidPolicy
+			}
+			return nil
+		case json.Number:
+			_, err := n.Int64()
+			return err
+		default:
+			return ErrInvalidPolicy
+		}
+	case TypeNumber:
+		switch n := v.(type) {
+		case float64:
+			return nil
+		case json.Number:
+			_, err := n.Float64()
+			return err
+		default:
+			return ErrInvalidPolicy
+		}
+	case TypeBoolean:
+		_, ok := v.(bool)
+		if !ok {
+			return ErrInvalidPolicy
+		}
+		return nil
+	default:
+		return ErrInvalidPolicy
+	}
 }
 
 func EmptyDocument() SchemaDocument {

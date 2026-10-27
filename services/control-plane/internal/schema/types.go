@@ -111,7 +111,7 @@ type Draft struct {
 }
 
 type PutSchemaInput struct {
-	ExpectedRevision *int64
+	ExpectedRevision int64
 	Document         SchemaDocument
 }
 

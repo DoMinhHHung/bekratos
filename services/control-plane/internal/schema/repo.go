@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,6 +29,14 @@ type EnvironmentChain struct {
 	ProjectStatus  string
 	EnvironmentID  uuid.UUID
 	EnvStatus      string
+}
+
+type MutationAuth struct {
+	OrgID     uuid.UUID
+	ProjectID uuid.UUID
+	EnvID     uuid.UUID
+	ActorID   uuid.UUID
+	Role      org.Role
 }
 
 func (r *Repository) GetEnvironmentChain(ctx context.Context, orgID, projectID, envID uuid.UUID) (EnvironmentChain, error) {
@@ -86,13 +96,16 @@ WHERE environment_id = $1`
 
 func (r *Repository) SaveDraft(
 	ctx context.Context,
-	envID uuid.UUID,
+	auth MutationAuth,
 	expectedRevision int64,
 	doc SchemaDocument,
-	actorID uuid.UUID,
 	requestID string,
 	action string,
 ) (Draft, error) {
+	if expectedRevision < 0 {
+		return Draft{}, ErrInvalidInput
+	}
+
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return Draft{}, err
@@ -104,11 +117,41 @@ func (r *Repository) SaveDraft(
 	}
 	defer tx.Rollback(ctx)
 
+	var role string
+	var orgStatus, projectStatus, envStatus string
+	err = tx.QueryRow(ctx, `
+SELECT m.role, o.status, p.status, e.status
+FROM organizations o
+JOIN organization_memberships m
+  ON m.organization_id = o.id AND m.identity_user_id = $4 AND m.status = 'active'
+JOIN projects p ON p.organization_id = o.id AND p.id = $2
+JOIN project_environments e ON e.project_id = p.id AND e.id = $3
+WHERE o.id = $1
+FOR UPDATE OF o, p, e`,
+		auth.OrgID, auth.ProjectID, auth.EnvID, auth.ActorID,
+	).Scan(&role, &orgStatus, &projectStatus, &envStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Draft{}, ErrNotFound
+	}
+	if err != nil {
+		return Draft{}, err
+	}
+	parsedRole, ok := org.ParseRole(role)
+	if !ok {
+		return Draft{}, ErrForbidden
+	}
+	if !parsedRole.CanMutateSchema() {
+		return Draft{}, ErrForbidden
+	}
+	if orgStatus != string(org.OrgStatusActive) || projectStatus != "active" || envStatus != "active" {
+		return Draft{}, ErrInactive
+	}
+
 	var currentRevision int64
 	var exists bool
 	err = tx.QueryRow(ctx, `
 SELECT revision, true FROM environment_schema_drafts WHERE environment_id = $1 FOR UPDATE`,
-		envID,
+		auth.EnvID,
 	).Scan(&currentRevision, &exists)
 	if errors.Is(err, pgx.ErrNoRows) {
 		currentRevision = 0
@@ -123,19 +166,34 @@ SELECT revision, true FROM environment_schema_drafts WHERE environment_id = $1 F
 
 	now := time.Now().UTC()
 	newRevision := currentRevision + 1
+	auditID := uuid.Must(uuid.NewV7())
+	targetID := auth.EnvID.String()
+	metadata, _ := json.Marshal(map[string]any{
+		"environment_id":    targetID,
+		"previous_revision": expectedRevision,
+		"new_revision":      newRevision,
+		"action":            action,
+	})
 
 	if !exists {
 		_, err = tx.Exec(ctx, `
 INSERT INTO environment_schema_drafts (environment_id, revision, schema_json, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $4)`,
-			envID, newRevision, raw, now,
+			auth.EnvID, newRevision, raw, now,
 		)
+		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+				return Draft{}, ErrConflictRevision
+			}
+			return Draft{}, err
+		}
 	} else {
 		ct, execErr := tx.Exec(ctx, `
 UPDATE environment_schema_drafts
 SET revision = $2, schema_json = $3, updated_at = $4
 WHERE environment_id = $1 AND revision = $5`,
-			envID, newRevision, raw, now, expectedRevision,
+			auth.EnvID, newRevision, raw, now, expectedRevision,
 		)
 		if execErr != nil {
 			return Draft{}, execErr
@@ -144,25 +202,20 @@ WHERE environment_id = $1 AND revision = $5`,
 			return Draft{}, ErrConflictRevision
 		}
 	}
-	if err != nil {
-		return Draft{}, err
-	}
 
-	metadata, _ := json.Marshal(map[string]any{
-		"environment_id":    envID.String(),
-		"previous_revision": expectedRevision,
-		"new_revision":      newRevision,
-		"action":            action,
-	})
 	_, err = tx.Exec(ctx, `
 INSERT INTO control_plane_audit_events (
   id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
-)
-SELECT $1, $2, p.organization_id, $3, 'environment_schema_draft', $4, $5, $6, $7
-FROM project_environments e
-JOIN projects p ON p.id = e.project_id
-WHERE e.id = $4`,
-		uuid.Must(uuid.NewV7()), actorID, action, envID.String(), requestID, metadata, now,
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		auditID,
+		auth.ActorID,
+		auth.OrgID,
+		action,
+		"environment_schema_draft",
+		targetID,
+		requestID,
+		metadata,
+		now,
 	)
 	if err != nil {
 		return Draft{}, err
@@ -173,7 +226,7 @@ WHERE e.id = $4`,
 	}
 
 	return Draft{
-		EnvironmentID: envID,
+		EnvironmentID: auth.EnvID,
 		Revision:      newRevision,
 		Document:      doc,
 		CreatedAt:     now,

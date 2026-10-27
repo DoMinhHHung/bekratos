@@ -34,6 +34,22 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	if files[0].sql == "" {
 		t.Error("migration SQL is empty")
 	}
+	var has008 bool
+	var maxVersion int64
+	for _, f := range files {
+		if f.version > maxVersion {
+			maxVersion = f.version
+		}
+		if f.version == 8 {
+			has008 = true
+		}
+	}
+	if !has008 {
+		t.Fatal("expected migration version 8 (schema_drafts)")
+	}
+	if maxVersion < 8 {
+		t.Fatalf("max migration version=%d, want >= 8", maxVersion)
+	}
 }
 
 func TestMigrateAndPingIntegration(t *testing.T) {
@@ -64,6 +80,25 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	}
 	if version != 1 {
 		t.Fatalf("version = %d, want 1", version)
+	}
+
+	var latest int64
+	if err := pool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
+		t.Fatal(err)
+	}
+	if latest < 8 {
+		t.Fatalf("latest migration=%d, want >= 8", latest)
+	}
+
+	var draftTable int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_schema_drafts'`).Scan(&draftTable); err != nil {
+		t.Fatal(err)
+	}
+	if draftTable != 1 {
+		t.Fatal("environment_schema_drafts missing after migrate")
 	}
 
 	var nullable string
@@ -128,7 +163,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, migration := range files {
-		if migration.version > 6 {
+		if migration.version > 7 {
 			continue
 		}
 		if _, err := tx.Exec(ctx, migration.sql); err != nil {
@@ -145,14 +180,14 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	}
 
 	if err := Migrate(ctx, upgradePool); err != nil {
-		t.Fatalf("upgrade from schema version 6: %v", err)
+		t.Fatalf("upgrade from schema version 7: %v", err)
 	}
 	var latest int64
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 7 {
-		t.Fatalf("latest migration=%d, want 7", latest)
+	if latest != 8 {
+		t.Fatalf("latest migration=%d, want 8", latest)
 	}
 	var seeded int
 	if err := upgradePool.QueryRow(ctx, `
@@ -162,6 +197,16 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	}
 	if seeded != 3 {
 		t.Fatalf("upgrade lost or unpublished seeded releases: count=%d", seeded)
+	}
+	var draftTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_schema_drafts'`).Scan(&draftTable); err != nil {
+		t.Fatal(err)
+	}
+	if draftTable != 1 {
+		t.Fatal("environment_schema_drafts missing after upgrade to 8")
 	}
 	var nullable string
 	var defaultValue *string
