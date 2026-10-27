@@ -2,7 +2,7 @@
 
 Bekratos là nền tảng Backend-as-a-Service hướng tới no-code/low-code. Người dùng có thể tạo backend bằng cách chọn modules, tùy chỉnh entities, fields và relationships qua Dashboard; developer có thể tích hợp API trực tiếp và tùy chỉnh ứng dụng bằng code.
 
-> Trạng thái tại 26/10/2026: Identity Service có source Rust, migration PostgreSQL, Docker, CI và integration/security tests. Control Plane và Backend Runtime/Data Plane chưa được triển khai. Có source/tests không đồng nghĩa mọi test đã pass hoặc service production-ready; phải kiểm tra CI và xác minh trên môi trường disposable trước release.
+> Trạng thái tại 27/10/2026: Identity có provider email Resend qua HTTPS và Control Plane có xác minh phiên trực tiếp qua Identity cùng HTTP provider adapter cho Runtime. Backend Runtime/Data Plane thật vẫn chưa có trong repository; vì vậy chưa có triển khai end-to-end. Mọi thay đổi trong PR #34 cần CI xanh và review; source code không tự chứng minh production readiness.
 
 ## Kiến trúc dự kiến
 
