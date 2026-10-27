@@ -1045,35 +1045,41 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "bytes"
  "chacha20poly1305",
  "chrono",
  "dotenvy",
  "hex",
  "hmac",
- "http",
  "http-body-util",
+ "http",
+ "hyper-util"
+ "hyper"
  "jsonwebtoken",
  "p256",
  "password-hash",
- "rand",
  "rand_core",
+ "rand",
  "redis",
  "regex",
- "serde",
+ "rustls"
  "serde_json",
+ "serde",
  "sha2",
  "sqlx",
  "subtle",
  "thiserror 1.0.69",
+ "tokio-rustls"
  "tokio",
- "tower",
  "tower-http",
- "tracing",
+ "tower",
  "tracing-subscriber",
- "utoipa",
+ "tracing",
  "utoipa-swagger-ui",
+ "utoipa",
  "uuid",
  "validator",
+ "webpki-roots 1.0.11"
 ]
 
 [[package]]
