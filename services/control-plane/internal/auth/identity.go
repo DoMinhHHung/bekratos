@@ -19,14 +19,14 @@ var (
 const maxIdentityResponseBytes = 64 << 10
 
 type IdentityIntrospection struct {
-	Active                bool    `json:"active"`
-	UserID                string  `json:"user_id"`
-	SessionID             string  `json:"session_id"`
-	Issuer                string  `json:"issuer"`
-	Audience              string  `json:"audience"`
-	ExpiresAt             int64   `json:"expires_at"`
-	EmailVerified         bool    `json:"email_verified"`
-	VerifiedPrimaryEmail  *string `json:"verified_primary_email"`
+	Active               bool    `json:"active"`
+	UserID               string  `json:"user_id"`
+	SessionID            string  `json:"session_id"`
+	Issuer               string  `json:"issuer"`
+	Audience             string  `json:"audience"`
+	ExpiresAt            int64   `json:"expires_at"`
+	EmailVerified        bool    `json:"email_verified"`
+	VerifiedPrimaryEmail *string `json:"verified_primary_email"`
 }
 
 type IdentityClient struct {
@@ -40,8 +40,8 @@ func NewIdentityClient(url, serviceKey string, timeout time.Duration) *IdentityC
 		timeout = 2 * time.Second
 	}
 	return &IdentityClient{
-		url:        strings.TrimSpace(url),
-		serviceKey: serviceKey,
+		url       : undefined,
+		serviceKey: undefined,
 		httpClient: &http.Client{
 			Timeout: timeout,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
