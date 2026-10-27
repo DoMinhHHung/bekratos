@@ -68,10 +68,13 @@ func requestFingerprint(mode TargetMode, versionChoice string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string) (CreateResult, error) {
+func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string, provider ProviderName) (CreateResult, error) {
 	in.IdempotencyKey = strings.TrimSpace(in.IdempotencyKey)
 	if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
 		return CreateResult{}, fmt.Errorf("%w: idempotency_key", ErrInvalidInput)
+	}
+	if provider == "" {
+		provider = ProviderUnavailable
 	}
 	mode := in.TargetMode
 	if mode == "" {
@@ -130,7 +133,7 @@ INSERT INTO deployments (
 ) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)
 ON CONFLICT (environment_id, idempotency_key) DO NOTHING
 RETURNING id`,
-		id, auth.EnvID, versionID, string(mode), string(ProviderUnavailable), string(StatusQueued),
+		id, auth.EnvID, versionID, string(mode), string(provider), string(StatusQueued),
 		in.IdempotencyKey, fp, providerReq, now, auth.ActorID, now, now,
 	).Scan(&insertedID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -157,7 +160,7 @@ RETURNING id`,
 		"deployment_id":            id.String(),
 		"configuration_version_id": versionID.String(),
 		"target_mode":              string(mode),
-		"provider":                 string(ProviderUnavailable),
+		"provider":                 string(provider),
 		"provider_request_id":      providerReq,
 	})
 	if err := r.insertAudit(ctx, tx, auth, "deployment.create", id.String(), requestID, meta, now); err != nil {
@@ -169,7 +172,7 @@ RETURNING id`,
 
 	d := Deployment{
 		ID: id, EnvironmentID: auth.EnvID, ConfigurationVersionID: versionID,
-		TargetMode: mode, Provider: ProviderUnavailable, Status: StatusQueued,
+		TargetMode: mode, Provider: provider, Status: StatusQueued,
 		MaxAttempts: 5, IdempotencyKey: in.IdempotencyKey, RequestFingerprint: fp,
 		ProviderRequestID: providerReq,
 		NextAttemptAt:     now, CreatedByUserID: auth.ActorID, CreatedAt: now, UpdatedAt: now,
