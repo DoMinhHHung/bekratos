@@ -226,6 +226,35 @@ SELECT EXISTS(
 	return *active, nil
 }
 
+type ConfigurationManifest struct {
+	FormatVersion int
+	Canonical     string
+	SHA256        string
+}
+
+func (r *Repository) LoadConfigurationManifest(ctx context.Context, envID, versionID uuid.UUID) (ConfigurationManifest, error) {
+	var manifest ConfigurationManifest
+	err := r.pool.QueryRow(ctx, `
+SELECT manifest_format_version, manifest_canonical, manifest_sha256
+FROM environment_configuration_versions
+WHERE id = $1 AND environment_id = $2
+`, versionID, envID).Scan(&manifest.FormatVersion, &manifest.Canonical, &manifest.SHA256)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConfigurationManifest{}, ErrConfigMismatch
+	}
+	if err != nil {
+		return ConfigurationManifest{}, err
+	}
+	if manifest.FormatVersion <= 0 || !json.Valid([]byte(manifest.Canonical)) {
+		return ConfigurationManifest{}, ErrManifestInvalid
+	}
+	sum := sha256.Sum256([]byte(manifest.Canonical))
+	if hex.EncodeToString(sum[:]) != manifest.SHA256 {
+		return ConfigurationManifest{}, ErrManifestInvalid
+	}
+	return manifest, nil
+}
+
 func (r *Repository) findIdempotent(ctx context.Context, tx pgx.Tx, envID uuid.UUID, key string) (Deployment, bool, error) {
 	d, err := scanDeployment(tx.QueryRow(ctx, deploymentSelect+`
 WHERE environment_id = $1 AND idempotency_key = $2`, envID, key))
