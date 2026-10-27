@@ -59,7 +59,7 @@ impl SmtpMailer {
     async fn send_inner(&self, email: OutboundEmail) -> AppResult<()> {
         validate_mailbox(&self.from)?;
         validate_mailbox(&email.to)?;
-        if email.subject.is_empty()
+        if email.text_body.len() > MAX_MESSAGE_BYTES || email.subject.is_empty()
             || email.subject.len() > 998
             || email.subject.contains(['\r', '\n'])
             || !email.subject.is_ascii()
@@ -67,8 +67,7 @@ impl SmtpMailer {
             return Err(AppError::Unavailable);
         }
 
-        let address = format!("{}:{}", self.host, self.port);
-        let tcp = TcpStream::connect(address)
+        let tcp = TcpStream::connect((self.host.as_str(), self.port))
             .await
             .map_err(|_| AppError::Unavailable)?;
         let server_name =
