@@ -81,8 +81,12 @@ impl EmailWorker {
                         repo.mark_delivery_permanent_failure(row.id, "sign_failed")
                             .await?;
                     } else {
-                        repo.mark_delivery_failure(row.id, "sign_failed", backoff_secs(row.delivery_attempts))
-                            .await?;
+                        repo.mark_delivery_failure(
+                            row.id,
+                            "sign_failed",
+                            backoff_secs(row.delivery_attempts),
+                        )
+                        .await?;
                     }
                     continue;
                 }
