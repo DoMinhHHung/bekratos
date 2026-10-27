@@ -23,6 +23,7 @@ type ProvisionResult struct {
 	Host                   string
 	Region                 string
 	RequestID              string
+	DeploymentID           uuid.UUID
 	EnvironmentID          uuid.UUID
 	VersionID              uuid.UUID
 	ReadinessProbePassed   bool
@@ -78,6 +79,9 @@ func (p *RecordingProvider) Provision(ctx context.Context, req ProvisionRequest)
 	res := p.Result
 	if res.RequestID == "" {
 		res.RequestID = req.ProviderRequestID
+	}
+	if res.DeploymentID == uuid.Nil {
+		res.DeploymentID = req.DeploymentID
 	}
 	return res, nil
 }
