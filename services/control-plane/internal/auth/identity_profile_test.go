@@ -14,6 +14,7 @@ import (
 
 func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 	userID := uuid.New()
+	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %s, want GET", r.Method)
@@ -21,15 +22,18 @@ func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer platform-token" {
 			t.Error("authorization header was not forwarded")
 		}
+		if r.Header.Get("X-Control-Plane-Service-Token") != "local-test-identity-service-token-32-characters" {
+			t.Error("missing Identity service authentication")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": userID.String(), "status": "active", "email_verified": true,
+			"subject": userID.String(), "session_id": sessionID.String(), "account_status": "active", "primary_email_verified": true,
 		})
 	}))
 	defer server.Close()
 
-	verifier := NewIdentityProfileVerifier(server.URL, time.Second)
-	verified, err := verifier.Verify(context.Background(), "Bearer platform-token", userID)
+	verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+	verified, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, sessionID)
 	if err != nil {
 		t.Fatalf("Verify returned error: %v", err)
 	}
