@@ -123,25 +123,20 @@ where
     expect_response(&mut stream, &[220]).await?;
     command(&mut stream, "EHLO bekratos.invalid", &[250]).await?;
     command(&mut stream, "AUTH LOGIN", &[334]).await?;
-    command(&mut stream, STANDARD.encode(username.as_bytes()).as_str(), &[334]).await?;
+    command(
+        &mut stream,
+        STANDARD.encode(username.as_bytes()).as_str(),
+        &[334],
+    )
+    .await?;
     command(
         &mut stream,
         STANDARD.encode(app_password.as_bytes()).as_str(),
         &[235],
     )
     .await?;
-    command(
-        &mut stream,
-        format!("MAIL FROM:<{from}>").as_str(),
-        &[250],
-    )
-    .await?;
-    command(
-        &mut stream,
-        format!("RCPT TO:<{to}>").as_str(),
-        &[250, 251],
-    )
-    .await?;
+    command(&mut stream, format!("MAIL FROM:<{from}>").as_str(), &[250]).await?;
+    command(&mut stream, format!("RCPT TO:<{to}>").as_str(), &[250, 251]).await?;
     command(&mut stream, "DATA", &[354]).await?;
 
     let encoded_body = encode_body(body);
@@ -171,15 +166,12 @@ where
     Ok(())
 }
 
-async fn command<S>(
-    stream: &mut BufReader<S>,
-    command: &str,
-    accepted: &[u16],
-) -> AppResult<()>
+async fn command<S>(stream: &mut BufReader<S>, command: &str, accepted: &[u16]) -> AppResult<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    if (command.contains('\r') || command.contains('\n')) || command.len() > MAX_RESPONSE_LINE_BYTES {
+    if (command.contains('\r') || command.contains('\n')) || command.len() > MAX_RESPONSE_LINE_BYTES
+    {
         return Err(AppError::Unavailable);
     }
     stream
@@ -254,11 +246,9 @@ fn validate_mailbox(value: &str) -> AppResult<()> {
         || domain.is_empty()
         || parts.next().is_some()
         || value.len() > 254
-        || value.bytes().any(|b| {
-            b.is_ascii_control()
-                || b.is_ascii_whitespace()
-                || matches!(b, b'<' | b'>')
-        })
+        || value
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace() || matches!(b, b'<' | b'>'))
     {
         return Err(AppError::Unavailable);
     }
@@ -287,7 +277,11 @@ mod tests {
     }
 
     async fn write_response(stream: &mut BufReader<tokio::io::DuplexStream>, response: &str) {
-        stream.get_mut().write_all(response.as_bytes()).await.unwrap();
+        stream
+            .get_mut()
+            .write_all(response.as_bytes())
+            .await
+            .unwrap();
         stream.get_mut().flush().await.unwrap();
     }
 
@@ -304,7 +298,10 @@ mod tests {
             return;
         }
         write_response(&mut stream, "334 UGFzc3dvcmQ6\r\n").await;
-        assert_eq!(read_line(&mut stream).await, "c2VjcmV0LWFwcC1wYXNzd29yZA==\r\n");
+        assert_eq!(
+            read_line(&mut stream).await,
+            "c2VjcmV0LWFwcC1wYXNzd29yZA==\r\n"
+        );
         write_response(&mut stream, "235 2.7.0 authenticated\r\n").await;
         assert!(read_line(&mut stream).await.starts_with("MAIL FROM:"));
         write_response(&mut stream, "250 2.1.0 sender ok\r\n").await;
@@ -385,7 +382,10 @@ mod tests {
     async fn rejects_smtp_rate_limit_response() {
         let (client, mut server) = tokio::io::duplex(1024);
         let server_task = tokio::spawn(async move {
-            server.write_all(b"421 4.7.0 rate limited\r\n").await.unwrap();
+            server
+                .write_all(b"421 4.7.0 rate limited\r\n")
+                .await
+                .unwrap();
             server.flush().await.unwrap();
         });
         let result = smtp_exchange(
