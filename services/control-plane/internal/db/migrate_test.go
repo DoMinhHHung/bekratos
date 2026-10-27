@@ -163,7 +163,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, migration := range files {
-		if migration.version > 7 {
+		if migration.version > 8 {
 			continue
 		}
 		if _, err := tx.Exec(ctx, migration.sql); err != nil {
@@ -180,14 +180,24 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	}
 
 	if err := Migrate(ctx, upgradePool); err != nil {
-		t.Fatalf("upgrade from schema version 7: %v", err)
+		t.Fatalf("upgrade from schema version 8: %v", err)
 	}
 	var latest int64
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 8 {
-		t.Fatalf("latest migration=%d, want 8", latest)
+	if latest != 9 {
+		t.Fatalf("latest migration=%d, want 9", latest)
+	}
+	var cfgTable int
+	if err := upgradePool.QueryRow(ctx, `
+		SELECT count(*) FROM information_schema.tables
+		WHERE table_schema = current_schema()
+		  AND table_name = 'environment_configuration_versions'`).Scan(&cfgTable); err != nil {
+		t.Fatal(err)
+	}
+	if cfgTable != 1 {
+		t.Fatal("environment_configuration_versions missing after upgrade to 9")
 	}
 	var seeded int
 	if err := upgradePool.QueryRow(ctx, `

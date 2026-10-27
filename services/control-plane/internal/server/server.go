@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/configversion"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/module"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/project"
@@ -19,6 +21,10 @@ import (
 type Server struct {
 	httpServer *http.Server
 	log        *slog.Logger
+	worker     *configversion.Worker
+	workerCtx  context.Context
+	workerStop context.CancelFunc
+	startOnce  sync.Once
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.Middleware) *Server {
@@ -39,6 +45,11 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	schemaSvc := schema.NewService(schemaRepo, orgRepo, projectRepo)
 	schemaHandlers := schema.NewHandlers(schemaSvc)
 
+	configVersionRepo := configversion.NewRepository(pool)
+	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter(), log)
+	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
+	worker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
 	mux.HandleFunc("/readyz", h.Readyz)
@@ -46,12 +57,15 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	projectHandlers.Register(mux, authMW)
 	moduleHandlers.Register(mux, authMW)
 	schemaHandlers.Register(mux, authMW)
+	configVersionHandlers.Register(mux, authMW)
 
 	var handler http.Handler = mux
 	handler = MaxBytes(cfg.BodyLimitBytes)(handler)
 	handler = AccessLog(log)(handler)
 	handler = Recover(log)(handler)
 	handler = RequestID(handler)
+
+	workerCtx, workerStop := context.WithCancel(context.Background())
 
 	return &Server{
 		httpServer: &http.Server{
@@ -61,11 +75,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 			WriteTimeout: cfg.WriteTimeout,
 			IdleTimeout:  cfg.IdleTimeout,
 		},
-		log: log,
+		log:        log,
+		worker:     worker,
+		workerCtx:  workerCtx,
+		workerStop: workerStop,
 	}
 }
 
 func (s *Server) Start() error {
+	s.startOnce.Do(func() {
+		s.worker.Start(s.workerCtx)
+	})
 	s.log.Info("server starting", "addr", s.httpServer.Addr)
 	err := s.httpServer.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
@@ -75,6 +95,8 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.workerStop()
+	s.worker.Stop()
 	return s.httpServer.Shutdown(ctx)
 }
 
