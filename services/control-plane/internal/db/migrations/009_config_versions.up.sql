@@ -1,9 +1,3 @@
-CREATE TABLE environment_module_pin_state (
-    environment_id UUID PRIMARY KEY REFERENCES project_environments (id),
-    revision       BIGINT NOT NULL DEFAULT 0 CHECK (revision >= 0),
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE environment_configuration_versions (
     id                      UUID PRIMARY KEY,
     environment_id          UUID NOT NULL REFERENCES project_environments (id),

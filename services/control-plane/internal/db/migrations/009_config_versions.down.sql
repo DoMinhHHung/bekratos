@@ -4,4 +4,3 @@ DROP TRIGGER IF EXISTS environment_configuration_versions_immutable_manifest ON 
 DROP FUNCTION IF EXISTS prevent_config_version_manifest_mutation();
 DROP TABLE IF EXISTS environment_configuration_apply_jobs;
 DROP TABLE IF EXISTS environment_configuration_versions;
-DROP TABLE IF EXISTS environment_module_pin_state;
