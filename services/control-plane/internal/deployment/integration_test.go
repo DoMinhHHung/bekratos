@@ -344,13 +344,14 @@ func TestStaleWorkerCannotMarkReady(t *testing.T) {
 
 	err = repo.MarkReady(ctx, d, "worker-b", ProvisionResult{
 		Outcome:              OutcomeSuccess,
+		DeploymentID:         d.ID,
 		EnvironmentID:        d.EnvironmentID,
 		VersionID:            d.ConfigurationVersionID,
 		RequestID:            d.ProviderRequestID,
 		ReadinessProbePassed: true,
 		ReadinessProbeID:     "test-readiness-probe",
 		ReadinessObservedAt:  time.Now().UTC(),
-		Host:                 "x",
+		Host:                 "x.example",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("error=%v; want stale worker", err)
@@ -399,6 +400,7 @@ WHERE id = $1`, d.ID)
 
 	err = repo.MarkReady(ctx, d, "worker-lease", ProvisionResult{
 		Outcome:              OutcomeSuccess,
+		DeploymentID:         d.ID,
 		EnvironmentID:        envID,
 		VersionID:            versionID,
 		RequestID:            d.ProviderRequestID,
@@ -687,6 +689,159 @@ func TestProviderFailureIsSanitized(t *testing.T) {
 	}
 }
 
+
+func TestClaimScansNullableReadinessEvidence(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "claim-columns-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := NewRepository(pool).Claim(ctx, "worker-claim-columns", 30*time.Second, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deployment := range claimed {
+		if deployment.ID == created.Deployment.ID {
+			if deployment.ReadinessProbeID != nil || deployment.ReadinessObservedAt != nil {
+				t.Fatal("newly claimed deployment must not have readiness evidence")
+			}
+			return
+		}
+	}
+	t.Fatal("created deployment was not returned by claim")
+}
+
+func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome: OutcomeSuccess,
+		DeploymentID: uuid.Must(uuid.NewV7()),
+		EnvironmentID: envID,
+		VersionID: versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID: "readiness-for-another-deployment",
+		ReadinessObservedAt: time.Now().UTC(),
+		Host: "runtime.example.test",
+		URL: "https://runtime.example.test",
+	}}
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "wrong-deployment-evidence-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-wrong-deployment", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected evidence", got.Status, got.FailureCode)
+	}
+	if got.ReadyAt != nil || got.ProviderURL != nil || got.ProviderHost != nil {
+		t.Fatal("mismatched deployment evidence must not persist ready target data")
+	}
+}
+
+func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome: OutcomeSuccess,
+		EnvironmentID: envID,
+		VersionID: versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID: "mismatched-target",
+		ReadinessObservedAt: time.Now().UTC(),
+		Host: "evil.example",
+		URL: "https://runtime.example.test",
+	}}
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "mismatched-target-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-mismatched-target", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected target mismatch", got.Status, got.FailureCode)
+	}
+}
+
+func TestReadyRejectsNonHTTPSURL(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome: OutcomeSuccess,
+		EnvironmentID: envID,
+		VersionID: versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID: "non-https-target",
+		ReadinessObservedAt: time.Now().UTC(),
+		Host: "runtime.example.test",
+		URL: "http://runtime.example.test",
+	}}
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "non-https-target-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-non-https-target", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected non-HTTPS target", got.Status, got.FailureCode)
+	}
+}
+
+func TestProviderTransportErrorIsAmbiguous(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	rec := &RecordingProvider{Err: errors.New("connection reset after request may have been accepted")}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "ambiguous-transport-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-ambiguous-transport", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "provider_ambiguous" {
+		t.Fatalf("status=%s code=%s; want ambiguous terminal outcome", got.Status, got.FailureCode)
+	}
+}
+
+func TestDatabaseRejectsReadyWithoutReadinessEvidence(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "database-ready-guard-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, "UPDATE deployments SET status = 'ready' WHERE id = $1", created.Deployment.ID)
+	if err == nil {
+		t.Fatal("database must reject ready status without persisted readiness evidence")
+	}
+}
 func TestNoActiveConfigRejected(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	if _, err := pool.Exec(ctx, `UPDATE project_environments SET active_configuration_version_id = NULL WHERE id = $1`, envID); err != nil {

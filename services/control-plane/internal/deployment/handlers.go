@@ -48,6 +48,8 @@ type deploymentResponse struct {
 	ProviderURL            string `json:"provider_url,omitempty"`
 	ProviderHost           string `json:"provider_host,omitempty"`
 	ProviderRegion         string `json:"provider_region,omitempty"`
+	ReadinessProbeID       string `json:"readiness_probe_id,omitempty"`
+	ReadinessObservedAt    string `json:"readiness_observed_at,omitempty"`
 	CreatedAt              string `json:"created_at"`
 	UpdatedAt              string `json:"updated_at"`
 	StartedAt              string `json:"started_at,omitempty"`
@@ -185,6 +187,12 @@ func toResponse(d Deployment) deploymentResponse {
 	}
 	if d.ProviderRegion != nil {
 		resp.ProviderRegion = *d.ProviderRegion
+	}
+	if d.ReadinessProbeID != nil {
+		resp.ReadinessProbeID = *d.ReadinessProbeID
+	}
+	if d.ReadinessObservedAt != nil {
+		resp.ReadinessObservedAt = d.ReadinessObservedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if d.StartedAt != nil {
 		resp.StartedAt = d.StartedAt.UTC().Format(time.RFC3339Nano)

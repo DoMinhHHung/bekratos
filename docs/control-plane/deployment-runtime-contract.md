@@ -50,7 +50,7 @@ A provider may report success only after checking the deployed target, not merel
 - `readiness_observed_at`, a recent timestamp;
 - a validated target host or URL.
 
-The Control Plane rejects missing, stale, future-dated, or mismatched evidence. It persists the readiness probe ID and observation timestamp alongside the ready transition. A host or URL alone is insufficient.
+The Control Plane rejects missing, stale, future-dated, or mismatched evidence. It persists the readiness probe ID and observation timestamp alongside the ready transition. A host or URL alone is insufficient. Migration 013 moves legacy rows marked ready without complete persisted evidence to failed rather than fabricating proof.
 
 The concrete Backend Runtime probe semantics, authentication, TLS policy, maximum response size, allowed host/URL rules, and how readiness checks are correlated with an immutable configuration version must be agreed and implemented before enabling a production provider.
 

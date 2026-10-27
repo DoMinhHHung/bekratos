@@ -34,7 +34,7 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	if files[0].sql == "" {
 		t.Error("migration SQL is empty")
 	}
-	var has008, has009, has010, has011, has012 bool
+	var has008, has009, has010, has011, has012, has013 bool
 	var maxVersion int64
 	for _, f := range files {
 		if f.version > maxVersion {
@@ -51,6 +51,8 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 			has011 = true
 		case 12:
 			has012 = true
+		case 13:
+			has013 = true
 		}
 	}
 	if !has008 {
@@ -68,8 +70,11 @@ func TestLoadMigrationsFindsInit(t *testing.T) {
 	if !has012 {
 		t.Fatal("expected migration version 12 (deployment readiness evidence)")
 	}
-	if maxVersion < 12 {
-		t.Fatalf("max migration version=%d, want >= 12", maxVersion)
+	if !has013 {
+		t.Fatal("expected migration version 13 (ready state requires readiness evidence)")
+	}
+	if maxVersion < 13 {
+		t.Fatalf("max migration version=%d, want >= 13", maxVersion)
 	}
 }
 
@@ -107,8 +112,8 @@ func TestMigrateAndPingIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest < 12 {
-		t.Fatalf("latest migration=%d, want >= 12", latest)
+	if latest < 13 {
+		t.Fatalf("latest migration=%d, want >= 13", latest)
 	}
 
 	var draftTable int
@@ -176,6 +181,18 @@ WHERE table_schema = current_schema()
 	}
 	if readinessColumns != 2 {
 		t.Fatalf("readiness evidence columns=%d, want 2", readinessColumns)
+	}
+
+	var readyConstraint int
+	if err := pool.QueryRow(ctx, `
+SELECT count(*)
+FROM pg_constraint
+WHERE conrelid = 'deployments'::regclass
+  AND conname = 'deployments_ready_requires_evidence'`).Scan(&readyConstraint); err != nil {
+		t.Fatal(err)
+	}
+	if readyConstraint != 1 {
+		t.Fatal("ready-state readiness evidence constraint missing")
 	}
 
 	var nullable string
@@ -259,8 +276,8 @@ func TestMigrateUpgradesFromPhase8Schema(t *testing.T) {
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 12 {
-		t.Fatalf("latest migration=%d, want 12", latest)
+	if latest != 13 {
+		t.Fatalf("latest migration=%d, want 13", latest)
 	}
 	var deployTable int
 	if err := upgradePool.QueryRow(ctx, `
@@ -269,7 +286,7 @@ WHERE table_schema = current_schema() AND table_name = 'deployments'`).Scan(&dep
 		t.Fatal(err)
 	}
 	if deployTable != 1 {
-		t.Fatal("deployments missing after upgrade to 12")
+		t.Fatal("deployments missing after upgrade to 13")
 	}
 
 	var readinessColumns int
@@ -391,8 +408,8 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 12 {
-		t.Fatalf("latest migration=%d, want 12", latest)
+	if latest != 13 {
+		t.Fatalf("latest migration=%d, want 13", latest)
 	}
 
 	var apiKeysTable int

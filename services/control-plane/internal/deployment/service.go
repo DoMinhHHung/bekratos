@@ -98,13 +98,13 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_unavailable", "deployment provider is unavailable", true)
 	}
 	if providerErr != nil {
-		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_error", "deployment provider request failed", false)
+		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_ambiguous", "provider outcome is unknown; reconciliation is required", true)
 	}
 
 	switch res.Outcome {
 	case OutcomeSuccess:
 		if err := s.repo.MarkReady(persistCtx, d, workerID, res); err != nil {
-			if errors.Is(err, ErrStaleWorker) {
+			if errors.Is(err, ErrStaleWorker) || !errors.Is(err, ErrReadyWithoutEvidence) {
 				return err
 			}
 			return s.repo.MarkFailed(persistCtx, d, workerID, "invalid_provider_evidence", "deployment provider returned invalid readiness evidence", true)

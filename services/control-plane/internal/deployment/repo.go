@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -118,32 +120,36 @@ func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInp
 	now := time.Now().UTC()
 	id := uuid.Must(uuid.NewV7())
 	providerReq := "dep-" + id.String()
-	_, err = tx.Exec(ctx, `
+	var insertedID uuid.UUID
+	err = tx.QueryRow(ctx, `
 INSERT INTO deployments (
   id, environment_id, configuration_version_id, target_mode, provider, status,
   attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
   next_attempt_at, created_by_identity_user_id, created_at, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)`,
+) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)
+ON CONFLICT (environment_id, idempotency_key) DO NOTHING
+RETURNING id`,
 		id, auth.EnvID, versionID, string(mode), string(ProviderUnavailable), string(StatusQueued),
 		in.IdempotencyKey, fp, providerReq, now, auth.ActorID, now, now,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			existing, ok, findErr := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey)
-			if findErr != nil {
-				return CreateResult{}, findErr
-			}
-			if ok {
-				if existing.RequestFingerprint != fp {
-					return CreateResult{}, ErrConflict
-				}
-				if err := tx.Commit(ctx); err != nil {
-					return CreateResult{}, err
-				}
-				return CreateResult{Deployment: existing, Reused: true}, nil
-			}
+	).Scan(&insertedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, ok, findErr := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey)
+		if findErr != nil {
+			return CreateResult{}, findErr
 		}
+		if !ok || existing.RequestFingerprint != fp {
+			return CreateResult{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CreateResult{}, err
+		}
+		return CreateResult{Deployment: existing, Reused: true}, nil
+	}
+	if err != nil {
 		return CreateResult{}, err
+	}
+	if insertedID != id {
+		return CreateResult{}, ErrConflict
 	}
 
 	meta, _ := json.Marshal(map[string]any{
@@ -167,14 +173,6 @@ INSERT INTO deployments (
 		NextAttemptAt:     now, CreatedByUserID: auth.ActorID, CreatedAt: now, UpdatedAt: now,
 	}
 	return CreateResult{Deployment: d, Reused: false}, nil
-}
-
-func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "deployments_env_idempotency_unique") || strings.Contains(msg, "23505")
 }
 
 func (r *Repository) resolveVersionID(ctx context.Context, tx pgx.Tx, envID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
@@ -353,7 +351,7 @@ RETURNING
   d.failure_code, d.failure_message, d.attempt_count, d.max_attempts, d.idempotency_key,
   d.request_fingerprint, d.provider_request_id,
   d.lease_owner, d.lease_expires_at, d.fencing_token, d.next_attempt_at,
-  d.provider_url, d.provider_host, d.provider_region,
+  d.provider_url, d.provider_host, d.provider_region, d.readiness_probe_id, d.readiness_observed_at,
   d.created_by_identity_user_id, d.created_at, d.updated_at, d.started_at, d.ready_at, d.finished_at`,
 		now, limit, workerID, leaseUntil)
 	if err != nil {
@@ -422,14 +420,79 @@ WHERE id = $1
 	return tx.Commit(ctx)
 }
 
+func normalizeProviderHost(raw string) (string, error) {
+	host := strings.TrimSpace(raw)
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/\\@?# \t\r\n") {
+		return "", ErrReadyWithoutEvidence
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if ip := net.ParseIP(host); ip != nil {
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return "", ErrReadyWithoutEvidence
+		}
+		return ip.String(), nil
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return "", ErrReadyWithoutEvidence
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrReadyWithoutEvidence
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return "", ErrReadyWithoutEvidence
+			}
+		}
+	}
+	return host, nil
+}
+
+func validateProviderTarget(res ProvisionResult) (*string, *string, error) {
+	rawURL := strings.TrimSpace(res.URL)
+	rawHost := strings.TrimSpace(res.Host)
+	var urlValue *string
+	var targetHost string
+
+	if rawURL != "" {
+		parsed, err := url.Parse(rawURL)
+		if err != nil || !parsed.IsAbs() || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(rawURL, "#") {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
+		targetHost, err = normalizeProviderHost(parsed.Hostname())
+		if err != nil {
+			return nil, nil, err
+		}
+		urlValue = &rawURL
+	}
+
+	if rawHost != "" {
+		normalizedHost, err := normalizeProviderHost(rawHost)
+		if err != nil {
+			return nil, nil, err
+		}
+		if targetHost != "" && normalizedHost != targetHost {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
+		targetHost = normalizedHost
+	}
+
+	if targetHost == "" {
+		return nil, nil, ErrReadyWithoutEvidence
+	}
+	hostValue := targetHost
+	return urlValue, &hostValue, nil
+}
+
 func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID string, res ProvisionResult) error {
-	if res.Outcome != OutcomeSuccess {
+	if res.Outcome != OutcomeSuccess || res.DeploymentID != d.ID {
 		return ErrReadyWithoutEvidence
 	}
 	if res.EnvironmentID != d.EnvironmentID || res.VersionID != d.ConfigurationVersionID {
 		return ErrReadyWithoutEvidence
 	}
-	if res.RequestID != d.ProviderRequestID || !res.ReadinessProbePassed || strings.TrimSpace(res.ReadinessProbeID) == "" {
+	if res.RequestID != d.ProviderRequestID || !res.ReadinessProbePassed || strings.TrimSpace(res.ReadinessProbeID) == "" || len(strings.TrimSpace(res.ReadinessProbeID)) > 256 || strings.ContainsAny(res.ReadinessProbeID, "\r\n\t") {
 		return ErrReadyWithoutEvidence
 	}
 	observedAt := res.ReadinessObservedAt.UTC()
@@ -437,8 +500,17 @@ func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID strin
 	if observedAt.IsZero() || observedAt.After(currentTime.Add(5*time.Second)) || currentTime.Sub(observedAt) > 2*time.Minute {
 		return ErrReadyWithoutEvidence
 	}
-	if strings.TrimSpace(res.Host) == "" && strings.TrimSpace(res.URL) == "" {
+	providerURL, providerHost, err := validateProviderTarget(res)
+	if err != nil {
+		return err
+	}
+	regionValue := strings.TrimSpace(res.Region)
+	if len(regionValue) > 64 || strings.ContainsAny(regionValue, "\r\n\t") {
 		return ErrReadyWithoutEvidence
+	}
+	var region *string
+	if regionValue != "" {
+		region = &regionValue
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -446,16 +518,6 @@ func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID strin
 	}
 	defer tx.Rollback(ctx)
 	now := time.Now().UTC()
-	var url, host, region *string
-	if res.URL != "" {
-		url = &res.URL
-	}
-	if res.Host != "" {
-		host = &res.Host
-	}
-	if res.Region != "" {
-		region = &res.Region
-	}
 	ct, err := tx.Exec(ctx, `
 UPDATE deployments
 SET status = 'ready',
@@ -477,7 +539,7 @@ WHERE id = $1
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
-		d.ID, url, host, region, strings.TrimSpace(res.ReadinessProbeID), observedAt, now, d.FencingToken, workerID,
+		d.ID, providerURL, providerHost, region, strings.TrimSpace(res.ReadinessProbeID), observedAt, now, d.FencingToken, workerID,
 	)
 	if err != nil {
 		return err
@@ -558,6 +620,8 @@ func safePublicFailure(code string) (string, string) {
 		return "provider_unknown", "deployment provider returned an unsupported outcome"
 	case "max_attempts_exceeded":
 		return "max_attempts_exceeded", "deployment exceeded the maximum provider attempts"
+	case "legacy_unverified_readiness":
+		return "legacy_unverified_readiness", "deployment readiness could not be verified"
 	case "provider_error":
 		return "provider_error", "deployment provider request failed"
 	default:
