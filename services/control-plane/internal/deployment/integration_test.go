@@ -713,7 +713,7 @@ func TestClaimScansNullableReadinessEvidence(t *testing.T) {
 }
 
 func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
-	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		DeploymentID:         uuid.Must(uuid.NewV7()),
@@ -747,7 +747,7 @@ func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
 }
 
 func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
-	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		EnvironmentID:        envID,
@@ -777,7 +777,7 @@ func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
 }
 
 func TestReadyRejectsNonHTTPSURL(t *testing.T) {
-	ctx, pool, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	ctx, _, svc, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
 	rec := &RecordingProvider{Result: ProvisionResult{
 		Outcome:              OutcomeSuccess,
 		EnvironmentID:        envID,
