@@ -9,6 +9,7 @@ import (
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/config"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/configversion"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/module"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/org"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/project"
@@ -38,6 +39,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	schemaRepo := schema.NewRepository(pool)
 	schemaSvc := schema.NewService(schemaRepo, orgRepo, projectRepo)
 	schemaHandlers := schema.NewHandlers(schemaSvc)
+
+	configVersionRepo := configversion.NewRepository(pool)
+	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter())
+	configversion.NewHandlers(configVersionSvc).Register(mux, authMW)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)

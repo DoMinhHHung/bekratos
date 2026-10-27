@@ -1,0 +1,7 @@
+DROP TRIGGER IF EXISTS project_environments_active_config_ownership ON project_environments;
+DROP FUNCTION IF EXISTS enforce_active_configuration_version_ownership();
+DROP TRIGGER IF EXISTS environment_configuration_versions_immutable_manifest ON environment_configuration_versions;
+DROP FUNCTION IF EXISTS prevent_config_version_manifest_mutation();
+DROP TABLE IF EXISTS environment_configuration_apply_jobs;
+DROP TABLE IF EXISTS environment_configuration_versions;
+DROP TABLE IF EXISTS environment_module_pin_state;
