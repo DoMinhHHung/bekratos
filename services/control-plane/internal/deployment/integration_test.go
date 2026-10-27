@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,7 +24,38 @@ func setupDeployEnv(t *testing.T) (context.Context, *pgxpool.Pool, *Service, uui
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	pool, err := db.NewPool(ctx, dsn)
+	bootstrapPool, err := db.NewPool(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemaName := "deployment_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	if _, err := bootstrapPool.Exec(ctx, "CREATE SCHEMA "+schemaName); err != nil {
+		bootstrapPool.Close()
+		t.Fatal(err)
+	}
+	bootstrapPool.Close()
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		cleanupPool, err := db.NewPool(cleanupCtx, dsn)
+		if err != nil {
+			t.Errorf("open cleanup pool: %v", err)
+			return
+		}
+		defer cleanupPool.Close()
+		if _, err := cleanupPool.Exec(cleanupCtx, "DROP SCHEMA IF EXISTS "+schemaName+" CASCADE"); err != nil {
+			t.Errorf("drop test schema: %v", err)
+		}
+	})
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schemaName + ",public"
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,12 +201,15 @@ func TestRecordingProviderReadyRequiresValidatedEvidence(t *testing.T) {
 	principal := auth.Principal{UserID: userID}
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: envID,
-			VersionID:     versionID,
-			Host:          "runtime.example.test",
-			URL:           "https://runtime.example.test",
-			Region:        "local",
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        envID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
+			Host:                 "runtime.example.test",
+			URL:                  "https://runtime.example.test",
+			Region:               "local",
 		},
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
@@ -201,10 +236,13 @@ func TestReadyRejectedOnEnvironmentMismatch(t *testing.T) {
 	principal := auth.Principal{UserID: userID}
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: uuid.Must(uuid.NewV7()),
-			VersionID:     versionID,
-			Host:          "evil.example",
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        uuid.Must(uuid.NewV7()),
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
+			Host:                 "evil.example",
 		},
 	}
 	svc := NewService(NewRepository(pool), rec, nil)
@@ -336,10 +374,15 @@ func TestStaleWorkerCannotMarkReady(t *testing.T) {
 	}
 
 	err = repo.MarkReady(ctx, d, "worker-b", ProvisionResult{
-		Outcome:       OutcomeSuccess,
-		EnvironmentID: d.EnvironmentID,
-		VersionID:     d.ConfigurationVersionID,
-		Host:          "x",
+		Outcome:              OutcomeSuccess,
+		DeploymentID:         d.ID,
+		EnvironmentID:        d.EnvironmentID,
+		VersionID:            d.ConfigurationVersionID,
+		RequestID:            d.ProviderRequestID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "test-readiness-probe",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "x.example",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("error=%v; want stale worker", err)
@@ -387,10 +430,15 @@ WHERE id = $1`, d.ID)
 	}
 
 	err = repo.MarkReady(ctx, d, "worker-lease", ProvisionResult{
-		Outcome:       OutcomeSuccess,
-		EnvironmentID: envID,
-		VersionID:     versionID,
-		Host:          "host.example",
+		Outcome:              OutcomeSuccess,
+		DeploymentID:         d.ID,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		RequestID:            d.ProviderRequestID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "test-readiness-probe",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "host.example",
 	})
 	if !errors.Is(err, ErrStaleWorker) {
 		t.Fatalf("MarkReady after expiry: %v", err)
@@ -443,6 +491,23 @@ WHERE id = $1`, created.Deployment.ID)
 	}
 	if got.FailureCode != "max_attempts_exceeded" {
 		t.Fatalf("code=%s", got.FailureCode)
+	}
+	var auditCount int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.failed'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND metadata->>'provider_request_id' = $2
+  AND metadata->>'failure_code' = 'max_attempts_exceeded'`,
+		created.Deployment.ID.String(), created.Deployment.ProviderRequestID,
+	).Scan(&auditCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("max-attempt audit rows=%d; want 1", auditCount)
 	}
 	if got.LeaseOwner != nil {
 		t.Fatal("lease must be cleared on terminalize")
@@ -552,11 +617,14 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 	repo := NewRepository(pool)
 	rec := &RecordingProvider{
 		Result: ProvisionResult{
-			Outcome:       OutcomeSuccess,
-			EnvironmentID: envID,
-			VersionID:     versionID,
-			Host:          "ok.example",
-			URL:           "https://ok.example",
+			Outcome:              OutcomeSuccess,
+			EnvironmentID:        envID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "test-readiness-probe",
+			ReadinessObservedAt:  time.Now().UTC(),
+			Host:                 "ok.example",
+			URL:                  "https://ok.example",
 		},
 	}
 	svc := NewService(repo, rec, nil)
@@ -575,6 +643,360 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 	}
 	if got.Status != StatusReady {
 		t.Fatalf("status=%s", got.Status)
+	}
+	var auditCount int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.ready'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND metadata->>'provider_request_id' = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&auditCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("deployment ready audit rows=%d; want 1", auditCount)
+	}
+}
+
+type contextTimeoutProvider struct{}
+
+func (p *contextTimeoutProvider) Name() ProviderName { return ProviderName("test-timeout") }
+
+func (p *contextTimeoutProvider) Provision(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
+	<-ctx.Done()
+	return ProvisionResult{}, ctx.Err()
+}
+
+func TestCancelledProviderContextPersistsAmbiguousOutcome(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	svc := NewService(NewRepository(pool), &contextTimeoutProvider{}, nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "cancelled-provider-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-cancelled-provider", 100*time.Millisecond, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "provider_ambiguous" {
+		t.Fatalf("status=%s code=%s; want terminal ambiguous failure", got.Status, got.FailureCode)
+	}
+}
+
+func TestReadyRequiresReadinessProbeEvidence(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome: OutcomeSuccess, EnvironmentID: envID, VersionID: versionID,
+		Host: "runtime.example.test", URL: "https://runtime.example.test",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "missing-probe-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-missing-probe", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected readiness evidence", got.Status, got.FailureCode)
+	}
+	if got.ReadyAt != nil || got.ProviderURL != nil || got.ProviderHost != nil {
+		t.Fatal("host and URL alone must not persist ready evidence")
+	}
+}
+
+func TestProviderFailureIsSanitized(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	principal := auth.Principal{UserID: userID}
+	sensitiveCode := "authorization Bearer secret-token"
+	sensitiveMessage := "database password secret-password"
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome: OutcomeFailure, Code: sensitiveCode, Message: sensitiveMessage,
+		EnvironmentID: envID, VersionID: versionID,
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "sanitize-provider-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-sanitize-provider", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, principal, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FailureCode != "provider_failure" || got.FailureMessage != "deployment provider failed" {
+		t.Fatalf("unexpected public failure representation: code=%q message=%q", got.FailureCode, got.FailureMessage)
+	}
+	if strings.Contains(got.FailureCode, "secret-token") || strings.Contains(got.FailureMessage, "secret-password") {
+		t.Fatal("provider diagnostics leaked into public failure fields")
+	}
+}
+
+func TestClaimScansNullableReadinessEvidence(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "claim-columns-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := NewRepository(pool).Claim(ctx, "worker-claim-columns", 30*time.Second, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deployment := range claimed {
+		if deployment.ID == created.Deployment.ID {
+			if deployment.ReadinessProbeID != nil || deployment.ReadinessObservedAt != nil {
+				t.Fatal("newly claimed deployment must not have readiness evidence")
+			}
+			return
+		}
+	}
+	t.Fatal("created deployment was not returned by claim")
+}
+
+func TestReadyRejectsEvidenceForAnotherDeployment(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome:              OutcomeSuccess,
+		DeploymentID:         uuid.Must(uuid.NewV7()),
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "readiness-for-another-deployment",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "runtime.example.test",
+		URL:                  "https://runtime.example.test",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "wrong-deployment-evidence-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-wrong-deployment", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected evidence", got.Status, got.FailureCode)
+	}
+	if got.ReadyAt != nil || got.ProviderURL != nil || got.ProviderHost != nil {
+		t.Fatal("mismatched deployment evidence must not persist ready target data")
+	}
+}
+
+func TestReadyRejectsMismatchedHostAndURL(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "mismatched-target",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "evil.example",
+		URL:                  "https://runtime.example.test",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "mismatched-target-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-mismatched-target", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected target mismatch", got.Status, got.FailureCode)
+	}
+}
+
+func TestReadyRejectsNonHTTPSURL(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "non-https-target",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "runtime.example.test",
+		URL:                  "http://runtime.example.test",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "non-https-target-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-non-https-target", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected non-HTTPS target", got.Status, got.FailureCode)
+	}
+}
+
+func TestReadyRejectsNoncanonicalNumericHost(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "numeric-host",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "127.1",
+		URL:                  "https://127.1",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "numeric-host-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-numeric-host", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected numeric host", got.Status, got.FailureCode)
+	}
+}
+
+func TestProviderTransportErrorIsAmbiguous(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	rec := &RecordingProvider{Err: errors.New("connection reset after request may have been accepted")}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "ambiguous-transport-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-ambiguous-transport", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "provider_ambiguous" {
+		t.Fatalf("status=%s code=%s; want ambiguous terminal outcome", got.Status, got.FailureCode)
+	}
+}
+
+func TestDatabaseRejectsReadyWithoutReadinessEvidence(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "database-ready-guard-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = pool.Exec(ctx, "UPDATE deployments SET status = 'ready' WHERE id = $1", created.Deployment.ID)
+	if err == nil {
+		t.Fatal("database must reject ready status without persisted readiness evidence")
+	}
+}
+
+func TestExplicitQueuedConfigurationVersionCannotBeDeployed(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	candidateID := uuid.Must(uuid.NewV7())
+	_, err := pool.Exec(ctx, `
+INSERT INTO environment_configuration_versions (
+  id, environment_id, version_number, schema_revision, pin_revision,
+  manifest_format_version, manifest_canonical, manifest_sha256,
+  compatibility, state, created_by_user_id
+) VALUES (
+  $1, $2, 2, 1, 1, 1, '{}',
+  'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+  'compatible', 'queued', $3
+)`, candidateID, envID, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey:         "queued-config-" + uuid.NewString(),
+		ConfigurationVersionID: &candidateID,
+	})
+	if !errors.Is(err, ErrVersionNotDeployable) {
+		t.Fatalf("error=%v; want non-deployable configuration state", err)
+	}
+}
+
+func TestWhitespaceOnlyIdempotencyKeyIsRejected(t *testing.T) {
+	ctx, _, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	_, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: " \t\r\n ",
+	})
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("error=%v; want invalid input for whitespace-only idempotency key", err)
+	}
+}
+
+func TestDeploymentOutcomeWritesAuditEvent(t *testing.T) {
+	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "outcome-audit-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-audit", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.failed'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND metadata->>'provider_request_id' = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("deployment failure audit rows=%d; want 1", count)
 	}
 }
 

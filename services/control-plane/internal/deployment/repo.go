@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -67,6 +69,7 @@ func requestFingerprint(mode TargetMode, versionChoice string) string {
 }
 
 func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInput, requestID string) (CreateResult, error) {
+	in.IdempotencyKey = strings.TrimSpace(in.IdempotencyKey)
 	if in.IdempotencyKey == "" || len(in.IdempotencyKey) > 128 {
 		return CreateResult{}, fmt.Errorf("%w: idempotency_key", ErrInvalidInput)
 	}
@@ -118,32 +121,36 @@ func (r *Repository) Create(ctx context.Context, auth MutationAuth, in CreateInp
 	now := time.Now().UTC()
 	id := uuid.Must(uuid.NewV7())
 	providerReq := "dep-" + id.String()
-	_, err = tx.Exec(ctx, `
+	var insertedID uuid.UUID
+	err = tx.QueryRow(ctx, `
 INSERT INTO deployments (
   id, environment_id, configuration_version_id, target_mode, provider, status,
   attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
   next_attempt_at, created_by_identity_user_id, created_at, updated_at
-) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)`,
+) VALUES ($1,$2,$3,$4,$5,$6,0,5,$7,$8,$9,$10,$11,$12,$13)
+ON CONFLICT (environment_id, idempotency_key) DO NOTHING
+RETURNING id`,
 		id, auth.EnvID, versionID, string(mode), string(ProviderUnavailable), string(StatusQueued),
 		in.IdempotencyKey, fp, providerReq, now, auth.ActorID, now, now,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			existing, ok, findErr := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey)
-			if findErr != nil {
-				return CreateResult{}, findErr
-			}
-			if ok {
-				if existing.RequestFingerprint != fp {
-					return CreateResult{}, ErrConflict
-				}
-				if err := tx.Commit(ctx); err != nil {
-					return CreateResult{}, err
-				}
-				return CreateResult{Deployment: existing, Reused: true}, nil
-			}
+	).Scan(&insertedID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, ok, findErr := r.findIdempotent(ctx, tx, auth.EnvID, in.IdempotencyKey)
+		if findErr != nil {
+			return CreateResult{}, findErr
 		}
+		if !ok || existing.RequestFingerprint != fp {
+			return CreateResult{}, ErrConflict
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return CreateResult{}, err
+		}
+		return CreateResult{Deployment: existing, Reused: true}, nil
+	}
+	if err != nil {
 		return CreateResult{}, err
+	}
+	if insertedID != id {
+		return CreateResult{}, ErrConflict
 	}
 
 	meta, _ := json.Marshal(map[string]any{
@@ -151,6 +158,7 @@ INSERT INTO deployments (
 		"configuration_version_id": versionID.String(),
 		"target_mode":              string(mode),
 		"provider":                 string(ProviderUnavailable),
+		"provider_request_id":      providerReq,
 	})
 	if err := r.insertAudit(ctx, tx, auth, "deployment.create", id.String(), requestID, meta, now); err != nil {
 		return CreateResult{}, err
@@ -169,27 +177,22 @@ INSERT INTO deployments (
 	return CreateResult{Deployment: d, Reused: false}, nil
 }
 
-func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "deployments_env_idempotency_unique") || strings.Contains(msg, "23505")
-}
-
 func (r *Repository) resolveVersionID(ctx context.Context, tx pgx.Tx, envID uuid.UUID, explicit *uuid.UUID) (uuid.UUID, error) {
 	if explicit != nil {
-		var exists bool
+		var state string
 		err := tx.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1 FROM environment_configuration_versions
-  WHERE id = $1 AND environment_id = $2
-)`, *explicit, envID).Scan(&exists)
+SELECT state
+FROM environment_configuration_versions
+WHERE id = $1 AND environment_id = $2
+FOR UPDATE`, *explicit, envID).Scan(&state)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, ErrConfigMismatch
+		}
 		if err != nil {
 			return uuid.Nil, err
 		}
-		if !exists {
-			return uuid.Nil, ErrConfigMismatch
+		if state != "active" && state != "superseded" {
+			return uuid.Nil, ErrVersionNotDeployable
 		}
 		return *explicit, nil
 	}
@@ -307,7 +310,7 @@ func (r *Repository) Claim(ctx context.Context, workerID string, lease time.Dura
 	now := time.Now().UTC()
 	leaseUntil := now.Add(lease)
 
-	_, err = tx.Exec(ctx, `
+	terminalRows, err := tx.Query(ctx, `
 UPDATE deployments
 SET status = 'failed',
     failure_code = 'max_attempts_exceeded',
@@ -319,11 +322,37 @@ SET status = 'failed',
     next_attempt_at = $1
 WHERE status IN ('queued', 'provisioning')
   AND attempt_count >= max_attempts
-  AND (lease_expires_at IS NULL OR lease_expires_at < $1)`,
+  AND (lease_expires_at IS NULL OR lease_expires_at < $1)
+RETURNING id, environment_id, configuration_version_id, provider_request_id, attempt_count, max_attempts`,
 		now,
 	)
 	if err != nil {
 		return nil, err
+	}
+	var exhausted []Deployment
+	for terminalRows.Next() {
+		var d Deployment
+		if err := terminalRows.Scan(&d.ID, &d.EnvironmentID, &d.ConfigurationVersionID, &d.ProviderRequestID, &d.AttemptCount, &d.MaxAttempts); err != nil {
+			terminalRows.Close()
+			return nil, err
+		}
+		exhausted = append(exhausted, d)
+	}
+	terminalRows.Close()
+	if err := terminalRows.Err(); err != nil {
+		return nil, err
+	}
+	for _, d := range exhausted {
+		metadata, _ := json.Marshal(map[string]any{
+			"status":              string(StatusFailed),
+			"failure_code":        "max_attempts_exceeded",
+			"attempt_count":       d.AttemptCount,
+			"max_attempts":        d.MaxAttempts,
+			"provider_request_id": d.ProviderRequestID,
+		})
+		if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.failed", metadata, now); err != nil {
+			return nil, err
+		}
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -353,7 +382,7 @@ RETURNING
   d.failure_code, d.failure_message, d.attempt_count, d.max_attempts, d.idempotency_key,
   d.request_fingerprint, d.provider_request_id,
   d.lease_owner, d.lease_expires_at, d.fencing_token, d.next_attempt_at,
-  d.provider_url, d.provider_host, d.provider_region,
+  d.provider_url, d.provider_host, d.provider_region, d.readiness_probe_id, d.readiness_observed_at,
   d.created_by_identity_user_id, d.created_at, d.updated_at, d.started_at, d.ready_at, d.finished_at`,
 		now, limit, workerID, leaseUntil)
 	if err != nil {
@@ -378,6 +407,7 @@ RETURNING
 }
 
 func (r *Repository) MarkFailed(ctx context.Context, d Deployment, workerID string, code, message string, terminal bool) error {
+	code, message = safePublicFailure(code)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -410,7 +440,7 @@ WHERE id = $1
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
-		d.ID, string(status), code, sanitizeMessage(message), next, finished, now, d.FencingToken, workerID,
+		d.ID, string(status), code, message, next, finished, now, d.FencingToken, workerID,
 	)
 	if err != nil {
 		return err
@@ -418,18 +448,127 @@ WHERE id = $1
 	if ct.RowsAffected() != 1 {
 		return ErrStaleWorker
 	}
+	eventType := "deployment.failed"
+	if status == StatusQueued {
+		eventType = "deployment.retry_scheduled"
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"status":              string(status),
+		"failure_code":        code,
+		"attempt_count":       d.AttemptCount,
+		"max_attempts":        d.MaxAttempts,
+		"provider_request_id": d.ProviderRequestID,
+	})
+	if err := r.insertOutcomeAudit(ctx, tx, d, eventType, metadata, now); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
 }
 
+func normalizeProviderHost(raw string) (string, error) {
+	host := strings.TrimSpace(raw)
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/\\@?# \t\r\n") {
+		return "", ErrReadyWithoutEvidence
+	}
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	if ip := net.ParseIP(host); ip != nil {
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return "", ErrReadyWithoutEvidence
+		}
+		return ip.String(), nil
+	}
+	labels := strings.Split(host, ".")
+	if len(labels) < 2 {
+		return "", ErrReadyWithoutEvidence
+	}
+	hasAlphabeticTLD := false
+	for _, ch := range labels[len(labels)-1] {
+		if ch >= 'a' && ch <= 'z' {
+			hasAlphabeticTLD = true
+			break
+		}
+	}
+	if !hasAlphabeticTLD {
+		return "", ErrReadyWithoutEvidence
+	}
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return "", ErrReadyWithoutEvidence
+		}
+		for _, ch := range label {
+			if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-') {
+				return "", ErrReadyWithoutEvidence
+			}
+		}
+	}
+	return host, nil
+}
+
+func validateProviderTarget(res ProvisionResult) (*string, *string, error) {
+	rawURL := strings.TrimSpace(res.URL)
+	rawHost := strings.TrimSpace(res.Host)
+	var urlValue *string
+	var targetHost string
+
+	if rawURL != "" {
+		if len(rawURL) > 2048 {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
+		parsed, err := url.Parse(rawURL)
+		if err != nil || !parsed.IsAbs() || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(rawURL, "#") {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
+		targetHost, err = normalizeProviderHost(parsed.Hostname())
+		if err != nil {
+			return nil, nil, err
+		}
+		urlValue = &rawURL
+	}
+
+	if rawHost != "" {
+		normalizedHost, err := normalizeProviderHost(rawHost)
+		if err != nil {
+			return nil, nil, err
+		}
+		if targetHost != "" && normalizedHost != targetHost {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
+		targetHost = normalizedHost
+	}
+
+	if targetHost == "" {
+		return nil, nil, ErrReadyWithoutEvidence
+	}
+	hostValue := targetHost
+	return urlValue, &hostValue, nil
+}
+
 func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID string, res ProvisionResult) error {
-	if res.Outcome != OutcomeSuccess {
+	if res.Outcome != OutcomeSuccess || res.DeploymentID != d.ID {
 		return ErrReadyWithoutEvidence
 	}
 	if res.EnvironmentID != d.EnvironmentID || res.VersionID != d.ConfigurationVersionID {
 		return ErrReadyWithoutEvidence
 	}
-	if res.Host == "" && res.URL == "" {
+	if res.RequestID != d.ProviderRequestID || !res.ReadinessProbePassed || strings.TrimSpace(res.ReadinessProbeID) == "" || len(strings.TrimSpace(res.ReadinessProbeID)) > 256 || strings.ContainsAny(res.ReadinessProbeID, "\r\n\t") {
 		return ErrReadyWithoutEvidence
+	}
+	observedAt := res.ReadinessObservedAt.UTC()
+	currentTime := time.Now().UTC()
+	if observedAt.IsZero() || observedAt.After(currentTime.Add(5*time.Second)) || currentTime.Sub(observedAt) > 2*time.Minute {
+		return ErrReadyWithoutEvidence
+	}
+	providerURL, providerHost, err := validateProviderTarget(res)
+	if err != nil {
+		return err
+	}
+	regionValue := strings.TrimSpace(res.Region)
+	if len(regionValue) > 64 || strings.ContainsAny(regionValue, "\r\n\t") {
+		return ErrReadyWithoutEvidence
+	}
+	var region *string
+	if regionValue != "" {
+		region = &regionValue
 	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -437,16 +576,6 @@ func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID strin
 	}
 	defer tx.Rollback(ctx)
 	now := time.Now().UTC()
-	var url, host, region *string
-	if res.URL != "" {
-		url = &res.URL
-	}
-	if res.Host != "" {
-		host = &res.Host
-	}
-	if res.Region != "" {
-		region = &res.Region
-	}
 	ct, err := tx.Exec(ctx, `
 UPDATE deployments
 SET status = 'ready',
@@ -455,24 +584,36 @@ SET status = 'ready',
     provider_url = $2,
     provider_host = $3,
     provider_region = $4,
+    readiness_probe_id = $5,
+    readiness_observed_at = $6,
     lease_owner = NULL,
     lease_expires_at = NULL,
-    ready_at = $5,
-    finished_at = $5,
-    updated_at = $5
+    ready_at = $7,
+    finished_at = $7,
+    updated_at = $7
 WHERE id = $1
-  AND fencing_token = $6
-  AND lease_owner = $7
+  AND fencing_token = $8
+  AND lease_owner = $9
   AND status = 'provisioning'
   AND lease_expires_at IS NOT NULL
   AND lease_expires_at > clock_timestamp()`,
-		d.ID, url, host, region, now, d.FencingToken, workerID,
+		d.ID, providerURL, providerHost, region, strings.TrimSpace(res.ReadinessProbeID), observedAt, now, d.FencingToken, workerID,
 	)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() != 1 {
 		return ErrStaleWorker
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"status":                   string(StatusReady),
+		"configuration_version_id": d.ConfigurationVersionID.String(),
+		"readiness_probe_id":       strings.TrimSpace(res.ReadinessProbeID),
+		"readiness_observed_at":    observedAt.Format(time.RFC3339Nano),
+		"provider_request_id":      d.ProviderRequestID,
+	})
+	if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.ready", metadata, now); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }
@@ -487,11 +628,31 @@ INSERT INTO control_plane_audit_events (
 	return err
 }
 
+func (r *Repository) insertOutcomeAudit(ctx context.Context, tx pgx.Tx, d Deployment, eventType string, meta []byte, now time.Time) error {
+	ct, err := tx.Exec(ctx, `
+INSERT INTO control_plane_audit_events (
+  id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
+)
+SELECT $1, NULL, p.organization_id, $2, 'deployment', $3, NULL, $4, $5
+FROM project_environments e
+JOIN projects p ON p.id = e.project_id
+WHERE e.id = $6`,
+		uuid.Must(uuid.NewV7()), eventType, d.ID.String(), meta, now, d.EnvironmentID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 const deploymentColumns = `
 id, environment_id, configuration_version_id, target_mode, provider, status,
 failure_code, failure_message, attempt_count, max_attempts, idempotency_key, request_fingerprint, provider_request_id,
 lease_owner, lease_expires_at, fencing_token, next_attempt_at,
-provider_url, provider_host, provider_region,
+provider_url, provider_host, provider_region, readiness_probe_id, readiness_observed_at,
 created_by_identity_user_id, created_at, updated_at, started_at, ready_at, finished_at`
 
 const deploymentSelect = `SELECT ` + deploymentColumns + ` FROM deployments `
@@ -505,7 +666,7 @@ func scanDeployment(row interface {
 		&d.ID, &d.EnvironmentID, &d.ConfigurationVersionID, &mode, &provider, &status,
 		&d.FailureCode, &d.FailureMessage, &d.AttemptCount, &d.MaxAttempts, &d.IdempotencyKey, &d.RequestFingerprint, &d.ProviderRequestID,
 		&d.LeaseOwner, &d.LeaseExpiresAt, &d.FencingToken, &d.NextAttemptAt,
-		&d.ProviderURL, &d.ProviderHost, &d.ProviderRegion,
+		&d.ProviderURL, &d.ProviderHost, &d.ProviderRegion, &d.ReadinessProbeID, &d.ReadinessObservedAt,
 		&d.CreatedByUserID, &d.CreatedAt, &d.UpdatedAt, &d.StartedAt, &d.ReadyAt, &d.FinishedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -531,9 +692,27 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-func sanitizeMessage(s string) string {
-	if len(s) > 512 {
-		return s[:512]
+func safePublicFailure(code string) (string, string) {
+	switch code {
+	case "provider_unavailable":
+		return "provider_unavailable", "deployment provider is unavailable"
+	case "provider_ambiguous":
+		return "provider_ambiguous", "provider outcome is unknown; reconciliation is required"
+	case "provider_retryable":
+		return "provider_retryable", "deployment provider reported a retryable failure"
+	case "provider_failure":
+		return "provider_failure", "deployment provider failed"
+	case "invalid_provider_evidence":
+		return "invalid_provider_evidence", "deployment provider returned invalid readiness evidence"
+	case "provider_unknown":
+		return "provider_unknown", "deployment provider returned an unsupported outcome"
+	case "max_attempts_exceeded":
+		return "max_attempts_exceeded", "deployment exceeded the maximum provider attempts"
+	case "legacy_unverified_readiness":
+		return "legacy_unverified_readiness", "deployment readiness could not be verified"
+	case "provider_error":
+		return "provider_error", "deployment provider request failed"
+	default:
+		return "provider_error", "deployment provider request failed"
 	}
-	return s
 }

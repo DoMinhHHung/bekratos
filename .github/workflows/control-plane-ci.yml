@@ -1,0 +1,71 @@
+name: Control Plane CI
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "services/control-plane/**"
+      - "docs/control-plane/**"
+      - ".github/workflows/control-plane-ci.yml"
+  pull_request:
+    paths:
+      - "services/control-plane/**"
+      - "docs/control-plane/**"
+      - ".github/workflows/control-plane-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-plane-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go quality and PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: bekratos
+          POSTGRES_PASSWORD: bekratos
+          POSTGRES_DB: bekratos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bekratos -d bekratos_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/control-plane/go.mod
+          cache-dependency-path: services/control-plane/go.sum
+      - name: Verify formatting
+        working-directory: services/control-plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            printf 'Go files require gofmt:\n%s\n' "$unformatted"
+            exit 1
+          fi
+      - name: Vet
+        working-directory: services/control-plane
+        run: go vet ./...
+      - name: Build
+        working-directory: services/control-plane
+        run: go build ./...
+      - name: Test with race detector
+        working-directory: services/control-plane
+        env:
+          DATABASE_URL_TEST: postgres://bekratos:bekratos@localhost:5432/bekratos_test?sslmode=disable
+        run: go test -race -count=1 ./...

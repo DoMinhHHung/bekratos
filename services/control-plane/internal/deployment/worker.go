@@ -15,6 +15,9 @@ type Worker struct {
 	batch     int
 	log       *slog.Logger
 	startOnce sync.Once
+	stopOnce  sync.Once
+	mu        sync.Mutex
+	runCancel context.CancelFunc
 	stop      chan struct{}
 	wg        sync.WaitGroup
 }
@@ -39,6 +42,10 @@ func NewWorker(svc *Service, workerID string, log *slog.Logger) *Worker {
 
 func (w *Worker) Start(ctx context.Context) {
 	w.startOnce.Do(func() {
+		runCtx, cancel := context.WithCancel(ctx)
+		w.mu.Lock()
+		w.runCancel = cancel
+		w.mu.Unlock()
 		w.wg.Add(1)
 		go func() {
 			defer w.wg.Done()
@@ -47,18 +54,16 @@ func (w *Worker) Start(ctx context.Context) {
 			defer ticker.Stop()
 			for {
 				select {
-				case <-ctx.Done():
+				case <-runCtx.Done():
 					w.log.Info("deployment worker stopping", "reason", "context_done", "worker_id", w.workerID)
 					return
 				case <-w.stop:
 					w.log.Info("deployment worker stopping", "reason", "stop", "worker_id", w.workerID)
 					return
 				case <-ticker.C:
-					runCtx, cancel := context.WithTimeout(ctx, w.lease)
 					n, err := w.svc.ProcessOnce(runCtx, w.workerID, w.lease, w.batch)
-					cancel()
 					if err != nil {
-						w.log.Warn("deployment process cycle failed", "worker_id", w.workerID, "error", err.Error())
+						w.log.Warn("deployment process cycle failed", "worker_id", w.workerID, "error_category", "claim_or_cycle_failed")
 						continue
 					}
 					if n > 0 {
@@ -71,10 +76,14 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) Stop() {
-	select {
-	case <-w.stop:
-	default:
+	w.stopOnce.Do(func() {
 		close(w.stop)
+	})
+	w.mu.Lock()
+	cancel := w.runCancel
+	w.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 	w.wg.Wait()
 }

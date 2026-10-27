@@ -48,6 +48,8 @@ type deploymentResponse struct {
 	ProviderURL            string `json:"provider_url,omitempty"`
 	ProviderHost           string `json:"provider_host,omitempty"`
 	ProviderRegion         string `json:"provider_region,omitempty"`
+	ReadinessProbeID       string `json:"readiness_probe_id,omitempty"`
+	ReadinessObservedAt    string `json:"readiness_observed_at,omitempty"`
 	CreatedAt              string `json:"created_at"`
 	UpdatedAt              string `json:"updated_at"`
 	StartedAt              string `json:"started_at,omitempty"`
@@ -186,6 +188,12 @@ func toResponse(d Deployment) deploymentResponse {
 	if d.ProviderRegion != nil {
 		resp.ProviderRegion = *d.ProviderRegion
 	}
+	if d.ReadinessProbeID != nil {
+		resp.ReadinessProbeID = *d.ReadinessProbeID
+	}
+	if d.ReadinessObservedAt != nil {
+		resp.ReadinessObservedAt = d.ReadinessObservedAt.UTC().Format(time.RFC3339Nano)
+	}
 	if d.StartedAt != nil {
 		resp.StartedAt = d.StartedAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -220,6 +228,8 @@ func mapErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusConflict, "no_active_configuration", "no active configuration version")
 	case errors.Is(err, ErrConfigMismatch):
 		writeErr(w, http.StatusConflict, "configuration_mismatch", "configuration version does not belong to environment")
+	case errors.Is(err, ErrVersionNotDeployable):
+		writeErr(w, http.StatusConflict, "configuration_not_deployable", "configuration version is not in a deployable state")
 	case errors.Is(err, ErrInvalidInput):
 		writeErr(w, http.StatusBadRequest, "invalid_input", "invalid input")
 	case errors.Is(err, ErrProviderUnavailable):
