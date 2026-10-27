@@ -29,12 +29,12 @@ func TestHTTPApplyAdapterSendsCanonicalManifestAndIdempotency(t *testing.T) {
 			t.Fatal("apply request ID was not used for idempotency")
 		}
 		var request struct {
-			ContractVersion string          `json:"contract_version"`
-			EnvironmentID uuid.UUID         `json:"environment_id"`
-			VersionID uuid.UUID             `json:"configuration_version_id"`
-			ManifestHash string              `json:"manifest_sha256"`
-			Manifest json.RawMessage         `json:"manifest"`
-			ApplyRequestID string             `json:"apply_request_id"`
+			ContractVersion         string          `json:"contract_version"`
+			EnvironmentID           uuid.UUID         `json:"environment_id"`
+			VersionID               uuid.UUID             `json:"configuration_version_id"`
+			ManifestHash            string              `json:"manifest_sha256"`
+			Manifest                json.RawMessage         `json:"manifest"`
+			ApplyRequestID          string             `json:"apply_request_id"`
 			ExpectedActiveVersionID *uuid.UUID `json:"expected_active_version_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -52,24 +52,24 @@ func TestHTTPApplyAdapterSendsCanonicalManifestAndIdempotency(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"accepted": true,
-			"environment_id": envID,
-			"applied_configuration_version_id": versionID,
-			"applied_sha256": hash,
-			"expected_active_version_id": baseID,
+			"accepted"                        : undefined,
+			"environment_id"                  : undefined,
+			"applied_configuration_version_id": undefined,
+			"applied_sha256"                  : undefined,
+			"expected_active_version_id"      : undefined,
 		})
 	}))
 	defer server.Close()
 
 	adapter := NewHTTPApplyAdapter(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	result, err := adapter.Apply(t.Context(), ApplyRequest{
-		EnvironmentID: envID,
-		VersionID: versionID,
-		ManifestFormatVersion: ManifestFormatVersion,
-		ManifestSHA256: hash,
-		ManifestCanonical: `{"entities":[]}`,
-		ApplyRequestID: applyID,
-		ExpectedActiveVersionID: &baseID,
+		EnvironmentID          : undefined,
+		VersionID              : undefined,
+		ManifestFormatVersion  : undefined,
+		ManifestSHA256         : undefined,
+		ManifestCanonical      : undefined,
+		ApplyRequestID         : undefined,
+		ExpectedActiveVersionID: undefined,
 	})
 	if err != nil {
 		t.Fatalf("Apply returned error: %v", err)
@@ -92,10 +92,10 @@ func TestHTTPApplyAdapterClassifiesServerErrorsAsAmbiguous(t *testing.T) {
 
 	adapter := NewHTTPApplyAdapter(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	_, err := adapter.Apply(t.Context(), ApplyRequest{
-		EnvironmentID: uuid.New(),
-		VersionID: uuid.New(),
-		ManifestCanonical: `{}`,
-		ApplyRequestID: "apply-ambiguous",
+		EnvironmentID    : undefined,
+		VersionID        : undefined,
+		ManifestCanonical: undefined,
+		ApplyRequestID   : undefined,
 	})
 	var ambiguous AmbiguousApplyError
 	if !errors.As(err, &ambiguous) {
@@ -111,10 +111,10 @@ func TestHTTPApplyAdapterClassifiesPreAcceptanceRateLimitAsRetryable(t *testing.
 
 	adapter := NewHTTPApplyAdapter(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	_, err := adapter.Apply(t.Context(), ApplyRequest{
-		EnvironmentID: uuid.New(),
-		VersionID: uuid.New(),
-		ManifestCanonical: `{}`,
-		ApplyRequestID: "apply-rate-limited",
+		EnvironmentID    : undefined,
+		VersionID        : undefined,
+		ManifestCanonical: undefined,
+		ApplyRequestID   : undefined,
 	})
 	var retryable RetryableApplyError
 	if !errors.As(err, &retryable) {
