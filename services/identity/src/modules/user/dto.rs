@@ -8,6 +8,7 @@ pub struct ProfileResponse {
     pub id: Uuid,
     pub status: String,
     pub email: Option<String>,
+    pub email_verified: bool,
     pub username: Option<String>,
     pub full_name: Option<String>,
     pub display_name: Option<String>,
