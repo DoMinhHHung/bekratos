@@ -40,28 +40,28 @@ func TestHTTPProviderProvisionPreservesIdempotencyAndValidatesResponseEnvelope(t
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"outcome": "success",
-			"deployment_id": deploymentID,
-			"environment_id": environmentID,
-			"configuration_version_id": versionID,
-			"provider_request_id": requestID,
-			"url": "https://app.runtime.example/deployments/" + deploymentID.String(),
-			"host": "app.runtime.example",
-			"region": "ap-southeast-1",
-			"readiness_probe_passed": true,
-			"readiness_probe_id": "probe-" + deploymentID.String(),
-			"readiness_observed_at": observedAt,
+			"outcome"                 : undefined,
+			"deployment_id"           : undefined,
+			"environment_id"          : undefined,
+			"configuration_version_id": undefined,
+			"provider_request_id"     : undefined,
+			"url"                     : undefined,
+			"host"                    : undefined,
+			"region"                  : undefined,
+			"readiness_probe_passed"  : undefined,
+			"readiness_probe_id"      : undefined,
+			"readiness_observed_at"   : undefined,
 		})
 	}))
 	defer server.Close()
 
 	provider := NewHTTPProvider(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	result, err := provider.Provision(t.Context(), ProvisionRequest{
-		DeploymentID: deploymentID,
-		EnvironmentID: environmentID,
-		ConfigurationVersionID: versionID,
-		ProviderRequestID: requestID,
-		TargetMode: TargetModeShared,
+		DeploymentID          : undefined,
+		EnvironmentID         : undefined,
+		ConfigurationVersionID: undefined,
+		ProviderRequestID     : undefined,
+		TargetMode            : undefined,
 	})
 	if err != nil {
 		t.Fatalf("Provision returned error: %v", err)
@@ -86,11 +86,11 @@ func TestHTTPProviderTreatsServerErrorsAsAmbiguous(t *testing.T) {
 
 	provider := NewHTTPProvider(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	result, err := provider.Provision(t.Context(), ProvisionRequest{
-		DeploymentID: uuid.New(),
-		EnvironmentID: uuid.New(),
-		ConfigurationVersionID: uuid.New(),
-		ProviderRequestID: "dep-test-ambiguous",
-		TargetMode: TargetModeShared,
+		DeploymentID          : undefined,
+		EnvironmentID         : undefined,
+		ConfigurationVersionID: undefined,
+		ProviderRequestID     : undefined,
+		TargetMode            : undefined,
 	})
 	if err != nil {
 		t.Fatalf("Provision returned unexpected transport error: %v", err)
@@ -121,7 +121,6 @@ func TestHTTPProviderTreatsPreAcceptanceRateLimitAsRetryable(t *testing.T) {
 	}
 }
 
-
 func TestHTTPProviderRejectsSuccessWithMismatchedIdentityAsAmbiguous(t *testing.T) {
 	deploymentID := uuid.New()
 	environmentID := uuid.New()
@@ -129,25 +128,25 @@ func TestHTTPProviderRejectsSuccessWithMismatchedIdentityAsAmbiguous(t *testing.
 	requestID := "dep-" + deploymentID.String()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"outcome": "success",
-			"deployment_id": uuid.New(),
-			"environment_id": environmentID,
-			"configuration_version_id": versionID,
-			"provider_request_id": requestID,
-			"readiness_probe_passed": true,
-			"readiness_probe_id": "probe-1",
-			"readiness_observed_at": time.Now().UTC(),
-			"url": "https://app.runtime.example",
+			"outcome"                 : undefined,
+			"deployment_id"           : undefined,
+			"environment_id"          : undefined,
+			"configuration_version_id": undefined,
+			"provider_request_id"     : undefined,
+			"readiness_probe_passed"  : undefined,
+			"readiness_probe_id"      : undefined,
+			"readiness_observed_at"   : undefined,
+			"url"                     : undefined,
 		})
 	}))
 	defer server.Close()
 	provider := NewHTTPProvider(server.URL, "synthetic-runtime-token-0123456789abcdef", time.Second)
 	result, err := provider.Provision(t.Context(), ProvisionRequest{
-		DeploymentID: deploymentID,
-		EnvironmentID: environmentID,
-		ConfigurationVersionID: versionID,
-		ProviderRequestID: requestID,
-		TargetMode: TargetModeShared,
+		DeploymentID          : undefined,
+		EnvironmentID         : undefined,
+		ConfigurationVersionID: undefined,
+		ProviderRequestID     : undefined,
+		TargetMode            : undefined,
 	})
 	if err != nil {
 		t.Fatalf("Provision returned error: %v", err)
@@ -160,8 +159,8 @@ func TestHTTPProviderRejectsSuccessWithMismatchedIdentityAsAmbiguous(t *testing.
 func TestHTTPProviderRejectsUnknownOutcomeAsAmbiguous(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"outcome": "ready-ish",
-			"provider_request_id": "dep-unknown",
+			"outcome"            : undefined,
+			"provider_request_id": undefined,
 		})
 	}))
 	defer server.Close()
