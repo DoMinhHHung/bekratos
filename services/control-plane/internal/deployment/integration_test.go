@@ -862,7 +862,7 @@ INSERT INTO environment_configuration_versions (
 		t.Fatal(err)
 	}
 	_, err = svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
-		IdempotencyKey: "queued-config-" + uuid.NewString(),
+		IdempotencyKey:          "queued-config-" + uuid.NewString(),
 		ConfigurationVersionID: &candidateID,
 	})
 	if !errors.Is(err, ErrVersionNotDeployable) {
@@ -906,6 +906,7 @@ WHERE event_type = 'deployment.failed'
 		t.Fatalf("deployment failure audit rows=%d; want 1", count)
 	}
 }
+
 func TestNoActiveConfigRejected(t *testing.T) {
 	ctx, pool, svc, userID, orgID, projectID, envID, _ := setupDeployEnv(t)
 	if _, err := pool.Exec(ctx, `UPDATE project_environments SET active_configuration_version_id = NULL WHERE id = $1`, envID); err != nil {
