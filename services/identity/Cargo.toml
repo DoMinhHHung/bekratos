@@ -12,6 +12,7 @@ tokio = { version = "1", features = [
     "macros",
     "signal",
     "net",
+    "io-util",
     "time",
 ] }
 tower = "0.5"
@@ -69,7 +70,7 @@ utoipa-swagger-ui = { version = "10", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "test-util", "io-util"] }
 tower = { version = "0.5", features = ["util"] }
 
 # Full LTO + codegen-units=1 peaks at multi-GB RAM and OOMs on small builders
