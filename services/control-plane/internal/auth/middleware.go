@@ -34,7 +34,7 @@ func (m *Middleware) RequirePrincipal(next http.Handler) http.Handler {
 			return
 		}
 		if m.identity != nil {
-			verified, identityErr := m.identity.Verify(r.Context(), authorization, principal.UserID)
+			verified, identityErr := m.identity.Verify(r.Context(), authorization, principal.UserID, principal.SessionID)
 			if errors.Is(identityErr, ErrIdentityUnauthorized) {
 				writeUnauthorized(w)
 				return
