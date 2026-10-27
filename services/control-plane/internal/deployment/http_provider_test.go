@@ -31,8 +31,8 @@ func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatalf("decode request: %v", err)
 		}
-		if body.DeploymentID != deploymentID || body.EnvironmentID != environmentID || body.ConfigurationVersionID != versionID {
-			t.Fatal("request identifiers did not match")
+		if body.DeploymentID != deploymentID || body.EnvironmentID != environmentID || body.ConfigurationVersionID != versionID || body.IdempotencyKey != requestID {
+			t.Fatal("request identifiers or stable provider request ID did not match")
 		}
 		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
 			Outcome:              OutcomeSuccess,
