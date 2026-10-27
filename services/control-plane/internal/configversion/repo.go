@@ -323,6 +323,9 @@ func (r *Repository) ClaimJobs(ctx context.Context, owner string, lease time.Dur
 	if limit <= 0 {
 		limit = 1
 	}
+	if lease <= 0 {
+		lease = 30 * time.Second
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -331,23 +334,23 @@ func (r *Repository) ClaimJobs(ctx context.Context, owner string, lease time.Dur
 
 	now := time.Now().UTC()
 	rows, err := tx.Query(ctx, `
-SELECT id FROM environment_configuration_apply_jobs
+SELECT DISTINCT environment_id
+FROM environment_configuration_apply_jobs
 WHERE (state = 'queued' AND next_attempt_at <= $1)
-   OR (state = 'leased' AND lease_expires_at < $1)
-ORDER BY next_attempt_at
-FOR UPDATE SKIP LOCKED
+   OR (state = 'leased' AND lease_expires_at <= $1)
+ORDER BY environment_id
 LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
 	}
-	var ids []uuid.UUID
+	var envIDs []uuid.UUID
 	for rows.Next() {
 		var id uuid.UUID
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		ids = append(ids, id)
+		envIDs = append(envIDs, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -356,8 +359,85 @@ LIMIT $2`, now, limit)
 
 	leaseExp := now.Add(lease)
 	var claimed []ApplyJob
-	for _, id := range ids {
-		_, err := tx.Exec(ctx, `
+	for _, envID := range envIDs {
+		var lockedEnvID uuid.UUID
+		err := tx.QueryRow(ctx, `
+SELECT id FROM project_environments WHERE id = $1 FOR UPDATE`, envID).Scan(&lockedEnvID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+
+		var activeLease bool
+		if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM environment_configuration_apply_jobs
+    WHERE environment_id = $1
+      AND state = 'leased'
+      AND lease_expires_at > $2
+)`, envID, now).Scan(&activeLease); err != nil {
+			return nil, err
+		}
+		if activeLease {
+			continue
+		}
+
+		var jobID uuid.UUID
+		var attempts, maxAttempts int
+		err = tx.QueryRow(ctx, `
+SELECT id, attempt_count, max_attempts
+FROM environment_configuration_apply_jobs
+WHERE environment_id = $1
+  AND ((state = 'queued' AND next_attempt_at <= $2)
+    OR (state = 'leased' AND lease_expires_at <= $2))
+ORDER BY next_attempt_at, created_at, id
+LIMIT 1
+FOR UPDATE SKIP LOCKED`, envID, now).Scan(&jobID, &attempts, &maxAttempts)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if attempts >= maxAttempts {
+			ct, err := tx.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET state = 'failed',
+    last_error_code = 'max_attempts',
+    last_error_message = 'maximum apply attempts exceeded',
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    updated_at = $2
+WHERE id = $1`, jobID, now)
+			if err != nil {
+				return nil, err
+			}
+			if ct.RowsAffected() != 1 {
+				return nil, ErrStaleWorker
+			}
+			ct, err = tx.Exec(ctx, `
+UPDATE environment_configuration_versions v
+SET state = $2,
+    failure_code = 'max_attempts',
+    failure_message = 'maximum apply attempts exceeded',
+    updated_at = $3
+FROM environment_configuration_apply_jobs j
+WHERE j.id = $1
+  AND v.id = j.configuration_version_id
+  AND v.state IN ('queued', 'applying')`, jobID, string(StateFailed), now)
+			if err != nil {
+				return nil, err
+			}
+			if ct.RowsAffected() != 1 {
+				return nil, ErrInvalidTransition
+			}
+			continue
+		}
+
+		ct, err := tx.Exec(ctx, `
 UPDATE environment_configuration_apply_jobs
 SET state = 'leased',
     lease_owner = $2,
@@ -365,30 +445,148 @@ SET state = 'leased',
     fencing_token = fencing_token + 1,
     attempt_count = attempt_count + 1,
     updated_at = $4
-WHERE id = $1`, id, owner, leaseExp, now)
+WHERE id = $1`, jobID, owner, leaseExp, now)
 		if err != nil {
 			return nil, err
+		}
+		if ct.RowsAffected() != 1 {
+			return nil, ErrStaleWorker
 		}
 		j, err := scanJob(tx.QueryRow(ctx, `
 SELECT id, environment_id, configuration_version_id, state, attempt_count, max_attempts,
        lease_owner, lease_expires_at, fencing_token, next_attempt_at,
        COALESCE(last_error_code,''), COALESCE(last_error_message,''), apply_request_id,
        created_at, updated_at
-FROM environment_configuration_apply_jobs WHERE id = $1`, id))
+FROM environment_configuration_apply_jobs WHERE id = $1`, jobID))
 		if err != nil {
 			return nil, err
 		}
-		_, _ = tx.Exec(ctx, `
+		ct, err = tx.Exec(ctx, `
 UPDATE environment_configuration_versions
 SET state = $2, updated_at = $3
 WHERE id = $1 AND state IN ('queued', 'applying')`,
 			j.ConfigurationVersionID, string(StateApplying), now)
+		if err != nil {
+			return nil, err
+		}
+		if ct.RowsAffected() != 1 {
+			return nil, ErrInvalidTransition
+		}
 		claimed = append(claimed, j)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
 	return claimed, nil
+}
+
+func (r *Repository) ScheduleJobRetry(ctx context.Context, job ApplyJob, fencing int64, code, message string, lease time.Duration) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	now := time.Now().UTC()
+	if job.AttemptCount >= job.MaxAttempts {
+		return r.releaseJobTerminalTx(ctx, tx, job, fencing, JobFailed, "max_attempts", "maximum apply attempts exceeded", now)
+	}
+
+	shift := job.AttemptCount
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > 5 {
+		shift = 5
+	}
+	backoff := time.Duration(1<<shift) * time.Second
+	if backoff > 5*time.Minute {
+		backoff = 5 * time.Minute
+	}
+	next := now.Add(backoff)
+	ct, err := tx.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET state = 'queued',
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    next_attempt_at = $3,
+    last_error_code = $4,
+    last_error_message = $5,
+    updated_at = $6
+WHERE id = $1 AND fencing_token = $2 AND state = 'leased'`,
+		job.ID, fencing, next, code, message, now)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrStaleWorker
+	}
+	ct, err = tx.Exec(ctx, `
+UPDATE environment_configuration_versions
+SET state = $2, updated_at = $3
+WHERE id = $1 AND state = $4`,
+		job.ConfigurationVersionID, string(StateQueued), now, string(StateApplying))
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrInvalidTransition
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) ReleaseJobTerminal(ctx context.Context, job ApplyJob, fencing int64, state JobState, code, message string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	return r.releaseJobTerminalTx(ctx, tx, job, fencing, state, code, message, time.Now().UTC())
+}
+
+func (r *Repository) releaseJobTerminalTx(ctx context.Context, tx pgx.Tx, job ApplyJob, fencing int64, state JobState, code, message string, now time.Time) error {
+	versionState := StateFailed
+	switch state {
+	case JobFailed:
+		versionState = StateFailed
+	case JobBlocked:
+		versionState = StateBlocked
+	default:
+		return ErrInvalidTransition
+	}
+	ct, err := tx.Exec(ctx, `
+UPDATE environment_configuration_apply_jobs
+SET state = $3,
+    last_error_code = $4,
+    last_error_message = $5,
+    lease_owner = NULL,
+    lease_expires_at = NULL,
+    updated_at = $6
+WHERE id = $1 AND fencing_token = $2 AND state = 'leased'`,
+		job.ID, fencing, string(state), code, message, now)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrStaleWorker
+	}
+	ct, err = tx.Exec(ctx, `
+UPDATE environment_configuration_versions
+SET state = $2, failure_code = $3, failure_message = $4, updated_at = $5
+WHERE id = $1 AND state IN ($6, $7)`,
+		job.ConfigurationVersionID, string(versionState), code, message, now,
+		string(StateApplying), string(StateQueued))
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrInvalidTransition
+	}
+	return tx.Commit(ctx)
+}
+
+func (r *Repository) MarkJobNeedsReconciliation(ctx context.Context, job ApplyJob, fencing int64, code, message string) error {
+	return r.MarkJobBlocked(ctx, job, fencing, code, message)
 }
 
 func (r *Repository) MarkJobBlocked(ctx context.Context, job ApplyJob, fencing int64, code, message string) error {
@@ -410,13 +608,16 @@ WHERE id = $1 AND fencing_token = $2 AND state = 'leased'`,
 	if ct.RowsAffected() != 1 {
 		return ErrStaleWorker
 	}
-	_, err = tx.Exec(ctx, `
+	ct, err = tx.Exec(ctx, `
 UPDATE environment_configuration_versions
 SET state = $2, failure_code = $3, failure_message = $4, updated_at = $5
 WHERE id = $1 AND state = $6`,
 		job.ConfigurationVersionID, string(StateBlocked), code, message, now, string(StateApplying))
 	if err != nil {
 		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrInvalidTransition
 	}
 	return tx.Commit(ctx)
 }
@@ -435,17 +636,35 @@ func (r *Repository) ActivateAfterApply(
 	defer tx.Rollback(ctx)
 
 	now := time.Now().UTC()
+	var activeID *uuid.UUID
+	err = tx.QueryRow(ctx, `
+SELECT active_configuration_version_id
+FROM project_environments
+WHERE id = $1
+FOR UPDATE`, job.EnvironmentID).Scan(&activeID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+
 	var jState string
 	var jFencing int64
 	var envID, versionID uuid.UUID
+	var applyRequestID string
+	var leaseActive bool
 	err = tx.QueryRow(ctx, `
-SELECT state, fencing_token, environment_id, configuration_version_id
+SELECT state, fencing_token, environment_id, configuration_version_id,
+       apply_request_id, lease_expires_at > clock_timestamp()
 FROM environment_configuration_apply_jobs WHERE id = $1 FOR UPDATE`, job.ID).
-		Scan(&jState, &jFencing, &envID, &versionID)
+		Scan(&jState, &jFencing, &envID, &versionID, &applyRequestID, &leaseActive)
 	if err != nil {
 		return err
 	}
-	if jState != string(JobLeased) || jFencing != fencing {
+	if jState != string(JobLeased) || jFencing != fencing ||
+		envID != job.EnvironmentID || versionID != job.ConfigurationVersionID ||
+		applyRequestID != job.ApplyRequestID || !leaseActive {
 		return ErrStaleWorker
 	}
 
@@ -459,14 +678,6 @@ FROM environment_configuration_apply_jobs WHERE id = $1 FOR UPDATE`, job.ID).
 	}
 	if v.ManifestSHA256 != expectedSHA256 {
 		return ErrValidation
-	}
-
-	var activeID *uuid.UUID
-	err = tx.QueryRow(ctx, `
-SELECT active_configuration_version_id FROM project_environments WHERE id = $1 FOR UPDATE`,
-		envID).Scan(&activeID)
-	if err != nil {
-		return err
 	}
 	if !uuidPtrEqual(activeID, v.ExpectedActiveVersionID) {
 		return ErrConflictRevision
@@ -483,36 +694,47 @@ WHERE id = $1 AND environment_id = $4 AND state = $5`,
 		}
 	}
 
-	_, err = tx.Exec(ctx, `
+	ct, err := tx.Exec(ctx, `
 UPDATE environment_configuration_versions
 SET state = $2, activated_at = $3, updated_at = $3
-WHERE id = $1 AND environment_id = $4`,
-		versionID, string(StateActive), now, envID)
+WHERE id = $1 AND environment_id = $4 AND state IN ($5, $6) AND manifest_sha256 = $7`,
+		versionID, string(StateActive), now, envID, string(StateApplying), string(StateQueued), expectedSHA256)
 	if err != nil {
 		return err
 	}
+	if ct.RowsAffected() != 1 {
+		return ErrInvalidTransition
+	}
 
-	_, err = tx.Exec(ctx, `
+	ct, err = tx.Exec(ctx, `
 UPDATE project_environments
 SET active_configuration_version_id = $2, updated_at = $3
-WHERE id = $1`, envID, versionID, now)
+WHERE id = $1 AND active_configuration_version_id IS NOT DISTINCT FROM $4`,
+		envID, versionID, now, v.ExpectedActiveVersionID)
 	if err != nil {
 		return err
 	}
+	if ct.RowsAffected() != 1 {
+		return ErrConflictRevision
+	}
 
-	_, err = tx.Exec(ctx, `
+	ct, err = tx.Exec(ctx, `
 UPDATE environment_configuration_apply_jobs
 SET state = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, updated_at = $2
-WHERE id = $1 AND fencing_token = $3`, job.ID, now, fencing)
+WHERE id = $1 AND fencing_token = $3 AND state = 'leased' AND lease_expires_at > clock_timestamp()`,
+		job.ID, now, fencing)
 	if err != nil {
 		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrStaleWorker
 	}
 
 	meta, _ := json.Marshal(map[string]any{
 		"version_id":      versionID.String(),
 		"manifest_sha256": expectedSHA256,
 	})
-	_, err = tx.Exec(ctx, `
+	ct, err = tx.Exec(ctx, `
 INSERT INTO control_plane_audit_events (
   id, actor_user_id, organization_id, event_type, target_type, target_id, request_id, metadata, created_at
 )
@@ -524,6 +746,9 @@ WHERE e.id = $7`,
 	)
 	if err != nil {
 		return err
+	}
+	if ct.RowsAffected() != 1 {
+		return ErrNotFound
 	}
 	return tx.Commit(ctx)
 }
@@ -538,7 +763,7 @@ JOIN organization_memberships m
 JOIN projects p ON p.organization_id = o.id AND p.id = $2
 JOIN project_environments e ON e.project_id = p.id AND e.id = $3
 WHERE o.id = $1
-FOR UPDATE OF o, p, e`,
+FOR UPDATE OF m, o, p, e`,
 		auth.OrgID, auth.ProjectID, auth.EnvID, auth.ActorID,
 	).Scan(&role, &orgStatus, &projectStatus, &envStatus)
 	if errors.Is(err, pgx.ErrNoRows) {

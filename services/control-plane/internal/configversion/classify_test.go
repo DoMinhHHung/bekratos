@@ -84,6 +84,13 @@ func TestClassifyRemoveField(t *testing.T) {
 
 func TestClassifyPinChange(t *testing.T) {
 	active, cand := basePair(t)
+	pin := ModulePinSnapshot{
+		ModuleSlug: "orders",
+		ReleaseID:  uuid.Must(uuid.NewV7()),
+		Version:    "1.0.0",
+	}
+	active.ModulePins = []ModulePinSnapshot{pin}
+	cand.ModulePins = []ModulePinSnapshot{pin}
 	cand.ModulePins[0].Version = "1.1.0"
 	cand.ModulePins[0].ReleaseID = uuid.Must(uuid.NewV7())
 	if Classify(&active, &cand) != CompatMigrationRequired {

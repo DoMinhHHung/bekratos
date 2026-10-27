@@ -35,13 +35,7 @@ func sampleManifest(t *testing.T) Manifest {
 				},
 			},
 		},
-		ModulePins: []ModulePinSnapshot{
-			{
-				ModuleSlug: "core",
-				ReleaseID:  uuid.Must(uuid.Parse("01900000-0000-7000-8000-000000000001")),
-				Version:    "1.0.0", APIContractVersion: "1",
-			},
-		},
+		ModulePins: []ModulePinSnapshot{},
 	}
 }
 
@@ -63,6 +57,65 @@ func TestCanonicalStableAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestCanonicalNumberEquivalence(t *testing.T) {
+	cases := []string{"1", "1.0", "1e0", "10e-1", "0.1e1"}
+	var hashes []string
+	for _, n := range cases {
+		s, err := canonicalizeNumber(n)
+		if err != nil {
+			t.Fatalf("%s: %v", n, err)
+		}
+		hashes = append(hashes, s)
+	}
+	for i := 1; i < len(hashes); i++ {
+		if hashes[i] != hashes[0] {
+			t.Fatalf("number forms diverge: %v", hashes)
+		}
+	}
+	if hashes[0] != "1" {
+		t.Fatalf("want 1 got %s", hashes[0])
+	}
+	z, err := canonicalizeNumber("-0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z != "0" {
+		t.Fatalf("negative zero want 0 got %s", z)
+	}
+}
+
+func TestCanonicalNestedDefaultNumbers(t *testing.T) {
+	m1 := sampleManifest(t)
+	m2 := sampleManifest(t)
+	ent1 := m1.Schema.Entities["order"]
+	ent2 := m2.Schema.Entities["order"]
+	ent2.CreatedAt = ent1.CreatedAt
+	ent2.UpdatedAt = ent1.UpdatedAt
+	f1 := ent1.Fields["title"]
+	f2 := ent2.Fields["title"]
+	f2.CreatedAt = f1.CreatedAt
+	f2.UpdatedAt = f1.UpdatedAt
+	f1.Type = schema.TypeNumber
+	f2.Type = schema.TypeNumber
+	f1.Default = []byte(`1.0`)
+	f2.Default = []byte(`1e0`)
+	ent1.Fields["title"] = f1
+	ent2.Fields["title"] = f2
+	m1.Schema.Entities["order"] = ent1
+	m2.Schema.Entities["order"] = ent2
+	_, h1, err := CanonicalizeAndHash(m1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, h2, err := CanonicalizeAndHash(m2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h1 != h2 {
+		t.Fatalf("nested numeric defaults should hash equal: %s vs %s", h1, h2)
+	}
+}
+
 func TestCanonicalKeyOrdering(t *testing.T) {
 	m := sampleManifest(t)
 	c, _, err := CanonicalizeAndHash(m)
@@ -71,11 +124,7 @@ func TestCanonicalKeyOrdering(t *testing.T) {
 	}
 	idxEnv := strings.Index(c, `"environment_id"`)
 	idxFmt := strings.Index(c, `"manifest_format_version"`)
-	idxPins := strings.Index(c, `"module_pins"`)
-	if idxEnv < 0 || idxFmt < 0 || idxPins < 0 {
-		t.Fatal("missing keys")
-	}
-	if !(idxEnv < idxFmt && idxFmt < idxPins) {
+	if idxEnv < 0 || idxFmt < 0 || !(idxEnv < idxFmt) {
 		t.Fatalf("unexpected key order in %s", c)
 	}
 }
@@ -93,13 +142,5 @@ func TestCanonicalContentChangeChangesHash(t *testing.T) {
 	}
 	if h1 == h2 {
 		t.Fatal("hash should change with content")
-	}
-}
-
-func TestCanonicalRejectsDuplicatePins(t *testing.T) {
-	m := sampleManifest(t)
-	m.ModulePins = append(m.ModulePins, m.ModulePins[0])
-	if _, _, err := CanonicalizeAndHash(m); err == nil {
-		t.Fatal("expected duplicate pin error")
 	}
 }

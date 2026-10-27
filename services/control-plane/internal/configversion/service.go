@@ -3,6 +3,7 @@ package configversion
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
@@ -15,13 +16,21 @@ type Service struct {
 	repo    *Repository
 	orgRepo *org.Repository
 	adapter ApplyAdapter
+	log     *slog.Logger
 }
 
-func NewService(repo *Repository, orgRepo *org.Repository, adapter ApplyAdapter) *Service {
+func NewService(repo *Repository, orgRepo *org.Repository, adapter ApplyAdapter, logs ...*slog.Logger) *Service {
 	if adapter == nil {
 		adapter = NewUnavailableApplyAdapter()
 	}
-	return &Service{repo: repo, orgRepo: orgRepo, adapter: adapter}
+	var log *slog.Logger
+	if len(logs) > 0 {
+		log = logs[0]
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Service{repo: repo, orgRepo: orgRepo, adapter: adapter, log: log}
 }
 
 func (s *Service) requireMembership(ctx context.Context, orgID, userID uuid.UUID) (org.Membership, error) {
@@ -126,7 +135,13 @@ func (s *Service) ProcessOnce(ctx context.Context, workerID string, lease time.D
 	}
 	processed := 0
 	for _, job := range jobs {
-		if err := s.processJob(ctx, job); err != nil {
+		if err := s.processJob(ctx, job, lease); err != nil {
+			s.log.Warn("config apply job finished with error",
+				"job_id", job.ID.String(),
+				"environment_id", job.EnvironmentID.String(),
+				"version_id", job.ConfigurationVersionID.String(),
+				"error", err.Error(),
+			)
 			continue
 		}
 		processed++
@@ -134,9 +149,10 @@ func (s *Service) ProcessOnce(ctx context.Context, workerID string, lease time.D
 	return processed, nil
 }
 
-func (s *Service) processJob(ctx context.Context, job ApplyJob) error {
+func (s *Service) processJob(ctx context.Context, job ApplyJob, lease time.Duration) error {
 	v, err := s.repo.GetVersion(ctx, job.EnvironmentID, job.ConfigurationVersionID)
 	if err != nil {
+		_ = s.repo.ReleaseJobTerminal(ctx, job, job.FencingToken, JobFailed, "version_missing", "configuration version missing")
 		return err
 	}
 	if err := VerifyHash(v.ManifestCanonical, v.ManifestSHA256); err != nil {
@@ -144,14 +160,19 @@ func (s *Service) processJob(ctx context.Context, job ApplyJob) error {
 	}
 
 	res, err := s.adapter.Apply(ctx, ApplyRequest{
-		EnvironmentID:         job.EnvironmentID,
-		VersionID:             v.ID,
-		ManifestFormatVersion: v.ManifestFormatVersion,
-		ManifestSHA256:        v.ManifestSHA256,
-		ManifestCanonical:     v.ManifestCanonical,
-		ApplyRequestID:        job.ApplyRequestID,
+		EnvironmentID:           job.EnvironmentID,
+		VersionID:               v.ID,
+		ManifestFormatVersion:   v.ManifestFormatVersion,
+		ManifestSHA256:          v.ManifestSHA256,
+		ManifestCanonical:       v.ManifestCanonical,
+		ApplyRequestID:          job.ApplyRequestID,
+		ExpectedActiveVersionID: v.ExpectedActiveVersionID,
 	})
 	if err != nil {
+		var retryable RetryableApplyError
+		if errors.As(err, &retryable) {
+			return s.repo.ScheduleJobRetry(ctx, job, job.FencingToken, retryable.Code, retryable.Message, lease)
+		}
 		code := "runtime_error"
 		msg := "runtime apply failed"
 		if errors.Is(err, ErrRuntimeUnavailable) {
@@ -169,10 +190,27 @@ func (s *Service) processJob(ctx context.Context, job ApplyJob) error {
 		if msg == "" {
 			msg = "runtime rejected configuration apply"
 		}
+		if code == "stale_base" {
+			return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, code, msg)
+		}
 		return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, code, msg)
 	}
-	if res.AppliedVersion != v.ID || res.AppliedSHA256 != v.ManifestSHA256 {
-		return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, "apply_ack_mismatch", "runtime acknowledgement did not match version and hash")
+	if res.AppliedVersion != v.ID ||
+		res.AppliedSHA256 != v.ManifestSHA256 ||
+		(res.EnvironmentID != uuid.Nil && res.EnvironmentID != job.EnvironmentID) ||
+		!uuidPtrEqual(res.ExpectedActiveVersionID, v.ExpectedActiveVersionID) {
+		return s.repo.MarkJobBlocked(ctx, job, job.FencingToken, "apply_ack_mismatch", "runtime acknowledgement did not match version hash environment or base")
 	}
-	return s.repo.ActivateAfterApply(ctx, job, job.FencingToken, v.ManifestSHA256, job.ApplyRequestID)
+	err = s.repo.ActivateAfterApply(ctx, job, job.FencingToken, v.ManifestSHA256, job.ApplyRequestID)
+	if err != nil {
+		if errors.Is(err, ErrConflictRevision) || errors.Is(err, ErrStaleWorker) {
+			_ = s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "activation_conflict",
+				"runtime accepted apply but control-plane activation failed; manual reconciliation required")
+			return err
+		}
+		_ = s.repo.MarkJobNeedsReconciliation(ctx, job, job.FencingToken, "activation_failed",
+			"runtime accepted apply but control-plane activation transaction failed; manual reconciliation required")
+		return err
+	}
+	return nil
 }

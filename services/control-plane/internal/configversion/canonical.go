@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,14 +99,18 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 		}
 		return nil
 	case json.Number:
-		s := t.String()
-		if s == "" {
-			return fmt.Errorf("%w: empty number", ErrValidation)
+		s, err := canonicalizeNumber(t.String())
+		if err != nil {
+			return err
 		}
 		buf.WriteString(s)
 		return nil
 	case float64:
-		buf.WriteString(strconv.FormatFloat(t, 'g', -1, 64))
+		s, err := canonicalizeFloat(t)
+		if err != nil {
+			return err
+		}
+		buf.WriteString(s)
 		return nil
 	case string:
 		b, err := json.Marshal(t)
@@ -156,6 +162,29 @@ func writeCanonical(buf *bytes.Buffer, v any) error {
 	default:
 		return fmt.Errorf("%w: unsupported JSON type %T", ErrValidation, v)
 	}
+}
+
+func canonicalizeNumber(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("%w: empty number", ErrValidation)
+	}
+	f, _, err := big.ParseFloat(raw, 10, 64, big.ToNearestEven)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid number %q", ErrValidation, raw)
+	}
+	fv, _ := f.Float64()
+	return canonicalizeFloat(fv)
+}
+
+func canonicalizeFloat(f float64) (string, error) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return "", fmt.Errorf("%w: non-finite number", ErrValidation)
+	}
+	if f == 0 {
+		return "0", nil
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64), nil
 }
 
 func DecodeManifest(canonical string) (Manifest, error) {

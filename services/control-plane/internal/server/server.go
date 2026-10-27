@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
@@ -20,6 +21,10 @@ import (
 type Server struct {
 	httpServer *http.Server
 	log        *slog.Logger
+	worker     *configversion.Worker
+	workerCtx  context.Context
+	workerStop context.CancelFunc
+	startOnce  sync.Once
 }
 
 func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.Middleware) *Server {
@@ -41,8 +46,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	schemaHandlers := schema.NewHandlers(schemaSvc)
 
 	configVersionRepo := configversion.NewRepository(pool)
-	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter())
+	configVersionSvc := configversion.NewService(configVersionRepo, orgRepo, configversion.NewUnavailableApplyAdapter(), log)
 	configVersionHandlers := configversion.NewHandlers(configVersionSvc)
+	worker := configversion.NewWorker(configVersionSvc, "control-plane-apply-worker", log)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.Healthz)
@@ -59,6 +65,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 	handler = Recover(log)(handler)
 	handler = RequestID(handler)
 
+	workerCtx, workerStop := context.WithCancel(context.Background())
+
 	return &Server{
 		httpServer: &http.Server{
 			Addr:         cfg.Addr(),
@@ -67,11 +75,17 @@ func New(cfg *config.Config, pool *pgxpool.Pool, log *slog.Logger, authMW *auth.
 			WriteTimeout: cfg.WriteTimeout,
 			IdleTimeout:  cfg.IdleTimeout,
 		},
-		log: log,
+		log:        log,
+		worker:     worker,
+		workerCtx:  workerCtx,
+		workerStop: workerStop,
 	}
 }
 
 func (s *Server) Start() error {
+	s.startOnce.Do(func() {
+		s.worker.Start(s.workerCtx)
+	})
 	s.log.Info("server starting", "addr", s.httpServer.Addr)
 	err := s.httpServer.ListenAndServe()
 	if err != nil && err != http.ErrServerClosed {
@@ -81,6 +95,8 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.workerStop()
+	s.worker.Stop()
 	return s.httpServer.Shutdown(ctx)
 }
 
