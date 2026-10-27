@@ -39,6 +39,7 @@ type Deployment struct {
 	AttemptCount           int
 	MaxAttempts            int
 	IdempotencyKey         string
+	RequestFingerprint     string
 	ProviderRequestID      string
 	LeaseOwner             *string
 	LeaseExpiresAt         *time.Time

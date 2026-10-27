@@ -16,6 +16,7 @@ CREATE TABLE deployments (
     attempt_count               INT NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     max_attempts                INT NOT NULL DEFAULT 5 CHECK (max_attempts > 0),
     idempotency_key             TEXT NOT NULL,
+    request_fingerprint         TEXT NOT NULL DEFAULT '',
     provider_request_id         TEXT NOT NULL DEFAULT '',
     lease_owner                 TEXT,
     lease_expires_at            TIMESTAMPTZ,
