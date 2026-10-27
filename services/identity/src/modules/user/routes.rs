@@ -3,11 +3,12 @@ use std::net::SocketAddr;
 use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::HeaderMap;
 use axum::routing::{delete, get};
+use subtle::ConstantTimeEq;
 use axum::{Json, Router};
 use uuid::Uuid;
 use validator::Validate;
 
-use super::dto::{MessageResponse, ProfileResponse, SessionListResponse, UpdateProfileRequest};
+use super::dto::{MessageResponse, ProfileResponse, SessionListResponse, SessionValidationResponse, UpdateProfileRequest};
 use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -27,8 +28,42 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
         .ok_or(AppError::Unauthorized)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/internal/session",
+    params(("x-control-plane-service-token" = String, Header, description = "Shared Control Plane service credential")),
+    responses(
+        (status = 200, description = "Active session and verified primary email state", body = SessionValidationResponse),
+        (status = 401, description = "Invalid service credential or inactive user session")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Internal"
+)]
+pub(crate) async fn validate_internal_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SessionValidationResponse>, AppError> {
+    let expected = state.config.control_plane_service_token.as_bytes();
+    let provided = headers
+        .get("x-control-plane-service-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .as_bytes();
+    if expected.is_empty()
+        || expected.len() != provided.len()
+        || expected.ct_eq(provided).unwrap_u8() != 1
+    {
+        return Err(AppError::Unauthorized);
+    }
+
+    let token = extract_bearer(&headers)?;
+    let session = service::validate_session(&state, token).await?;
+    Ok(Json(session))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/v1/internal/session", get(validate_internal_session))
         .route("/v1/me", get(get_profile).patch(update_profile))
         .route("/v1/me/sessions", get(list_sessions).delete(revoke_others))
         .route("/v1/me/sessions/{id}", delete(revoke_one))
