@@ -77,7 +77,7 @@ func (v *Validator) ValidateToken(ctx context.Context, tokenStr string) (Princip
 	}
 
 	lifetime := claims.ExpiresAt.Sub(claims.IssuedAt.Time)
-	if lifetime <= 0 || lifetime > v.maxTokenTTL+v.leeway {
+	if lifetime <= 0 || lifetime > v.maxTokenTTL {
 		return Principal{}, fmt.Errorf("token lifetime exceeds maximum")
 	}
 

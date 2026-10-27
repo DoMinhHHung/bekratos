@@ -118,14 +118,11 @@ func TestResolve_OptionalAlreadySelectedIncompatible(t *testing.T) {
 		rel("a", "1.0.0", []Dependency{{ModuleSlug: "b", VersionConstraint: "^2.0.0", Required: false}}, nil),
 		rel("b", "1.0.0", nil, nil),
 	}
-	plan, err := ResolveWithOptions(modules, releases, []Selection{
+	_, err := ResolveWithOptions(modules, releases, []Selection{
 		{ModuleSlug: "a"}, {ModuleSlug: "b", Version: "1.0.0"},
 	}, ResolveOptions{RuntimeVersion: "1.0.0", APIContract: "1"})
-	if err != nil {
-		t.Fatalf("optional incompatible must not fail: %v", err)
-	}
-	if len(plan.Releases) != 2 {
-		t.Fatalf("got %d", len(plan.Releases))
+	if err == nil {
+		t.Fatal("optional dependency already selected at incompatible version must fail")
 	}
 }
 

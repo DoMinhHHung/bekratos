@@ -128,8 +128,34 @@ func (r *Repository) GetProject(ctx context.Context, orgID, projectID uuid.UUID)
 	return p, nil
 }
 
-func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID uuid.UUID, displayName, description *string) (Project, error) {
-	tag, err := r.pool.Exec(ctx, `
+func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID, actorUserID uuid.UUID, requestID string, displayName, description *string) (Project, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Project{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var orgStatus, role string
+	err = tx.QueryRow(ctx, `
+		SELECT o.status, m.role
+		FROM organizations o
+		INNER JOIN organization_memberships m ON m.organization_id = o.id
+		WHERE o.id = $1 AND m.identity_user_id = $2 AND m.status = 'active'
+		FOR UPDATE OF o, m`, orgID, actorUserID,
+	).Scan(&orgStatus, &role)
+	if err != nil {
+		return Project{}, ErrNotFound
+	}
+	if orgStatus != "active" {
+		return Project{}, ErrForbidden
+	}
+	switch role {
+	case "owner", "admin":
+	default:
+		return Project{}, ErrForbidden
+	}
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE projects
 		SET display_name = COALESCE($3, display_name),
 		    description = COALESCE($4, description),
@@ -142,6 +168,12 @@ func (r *Repository) UpdateProject(ctx context.Context, orgID, projectID uuid.UU
 	}
 	if tag.RowsAffected() == 0 {
 		return Project{}, ErrNotFound
+	}
+	if err := insertProjectAudit(ctx, tx, actorUserID, orgID, "project.updated", "project", projectID.String(), requestID, nil); err != nil {
+		return Project{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Project{}, err
 	}
 	return r.GetProject(ctx, orgID, projectID)
 }

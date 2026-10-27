@@ -3,11 +3,11 @@ package module
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/httpjson"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 	"github.com/google/uuid"
 )
@@ -79,7 +79,7 @@ type resolveRequest struct {
 
 func (h *Handlers) resolve(w http.ResponseWriter, r *http.Request) {
 	var req resolveRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -133,7 +133,7 @@ func (h *Handlers) setPins(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req resolveRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -154,19 +154,6 @@ func parseScope(r *http.Request) (uuid.UUID, uuid.UUID, uuid.UUID, bool) {
 	projectID, err2 := uuid.Parse(r.PathValue("projectID"))
 	envID, err3 := uuid.Parse(r.PathValue("envID"))
 	return orgID, projectID, envID, err1 == nil && err2 == nil && err3 == nil
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("trailing json")
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

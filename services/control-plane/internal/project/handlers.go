@@ -3,11 +3,11 @@ package project
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/httpjson"
 	"github.com/google/uuid"
 )
 
@@ -60,13 +60,13 @@ type projectResponse struct {
 }
 
 type envResponse struct {
-	ID        string  `json:"id"`
-	ProjectID string  `json:"project_id"`
-	Slug      string  `json:"slug"`
-	Kind      string  `json:"kind"`
-	Status    string  `json:"status"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	ID         string  `json:"id"`
+	ProjectID  string  `json:"project_id"`
+	Slug       string  `json:"slug"`
+	Kind       string  `json:"kind"`
+	Status     string  `json:"status"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
 	ArchivedAt *string `json:"archived_at,omitempty"`
 }
 
@@ -82,7 +82,7 @@ func (h *Handlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createProjectRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -94,7 +94,7 @@ func (h *Handlers) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"project": toProjectResponse(p),
+		"project":     toProjectResponse(p),
 		"environment": toEnvResponse(env),
 	})
 }
@@ -163,7 +163,7 @@ func (h *Handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req updateProjectRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -217,7 +217,7 @@ func (h *Handlers) createEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createEnvRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -320,7 +320,7 @@ func toProjectResponse(p Project) projectResponse {
 	resp := projectResponse{
 		ID: p.ID.String(), OrganizationID: p.OrganizationID.String(),
 		Slug: p.Slug, DisplayName: p.DisplayName, Description: p.Description,
-		Status: string(p.Status),
+		Status:    string(p.Status),
 		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: p.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -343,19 +343,6 @@ func toEnvResponse(e Environment) envResponse {
 		resp.ArchivedAt = &s
 	}
 	return resp
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("trailing json")
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

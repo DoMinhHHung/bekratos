@@ -17,6 +17,7 @@ var (
 	ErrUnknownRelease    = errors.New("unknown release")
 	ErrDuplicateRelease  = errors.New("duplicate release")
 	ErrIncompatible      = errors.New("incompatible release")
+	maxSearchDepth       = 64
 )
 
 type ResolveOptions struct {
@@ -103,7 +104,7 @@ func ResolveWithOptions(modules []Module, releases []Release, selections []Selec
 
 	chosen := make(map[string]Release)
 	stack := make(map[string]bool)
-	if err := search(idx, constraints, chosen, stack, opts); err != nil {
+	if err := search(idx, constraints, chosen, stack, opts, 0); err != nil {
 		return ResolutionPlan{}, err
 	}
 
@@ -125,7 +126,7 @@ func ResolveWithOptions(modules []Module, releases []Release, selections []Selec
 	return plan, nil
 }
 
-func search(idx *catalogIndex, constraints map[string][]string, chosen map[string]Release, stack map[string]bool, opts ResolveOptions) error {
+func search(idx *catalogIndex, constraints map[string][]string, chosen map[string]Release, stack map[string]bool, opts ResolveOptions, depth int) error {
 	var next string
 	for slug := range constraints {
 		if _, ok := chosen[slug]; !ok {
@@ -136,6 +137,9 @@ func search(idx *catalogIndex, constraints map[string][]string, chosen map[strin
 	}
 	if next == "" {
 		return nil
+	}
+	if depth > maxSearchDepth {
+		return fmt.Errorf("%w: search depth exceeded", ErrUnsatisfiable)
 	}
 	if stack[next] {
 		return fmt.Errorf("%w: %s", ErrCycle, next)
@@ -257,7 +261,7 @@ func search(idx *catalogIndex, constraints map[string][]string, chosen map[strin
 			continue
 		}
 		chosen[next] = cand
-		if err := search(idx, childConstraints, chosen, stack, opts); err != nil {
+		if err := search(idx, childConstraints, chosen, stack, opts, depth+1); err != nil {
 			delete(chosen, next)
 			lastErr = err
 			continue
@@ -269,11 +273,17 @@ func search(idx *catalogIndex, constraints map[string][]string, chosen map[strin
 			if existing, already := chosen[dep.ModuleSlug]; already {
 				ev, err := ParseVersion(existing.Version)
 				if err != nil {
-					continue
+					delete(chosen, next)
+					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+					ok = false
+					break
 				}
 				dc, err := ParseConstraint(dep.VersionConstraint)
 				if err != nil || !dc.Check(ev) {
-					continue
+					delete(chosen, next)
+					lastErr = fmt.Errorf("%w: %s", ErrUnsatisfiable, dep.ModuleSlug)
+					ok = false
+					break
 				}
 				continue
 			}
@@ -284,11 +294,14 @@ func search(idx *catalogIndex, constraints map[string][]string, chosen map[strin
 			optConstraints[dep.ModuleSlug] = append(optConstraints[dep.ModuleSlug], dep.VersionConstraint)
 			optChosen := cloneChosen(chosen)
 			optStack := cloneStack(stack)
-			if err := search(idx, optConstraints, optChosen, optStack, opts); err == nil {
+			if err := search(idx, optConstraints, optChosen, optStack, opts, depth+1); err == nil {
 				for k, v := range optChosen {
 					chosen[k] = v
 				}
 			}
+		}
+		if !ok {
+			continue
 		}
 		delete(stack, next)
 		return nil

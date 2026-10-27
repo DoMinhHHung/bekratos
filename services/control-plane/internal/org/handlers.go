@@ -3,11 +3,11 @@ package org
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/auth"
+	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/httpjson"
 	"github.com/DoMinhHHung/bekratos/services/control-plane/internal/requestid"
 	"github.com/google/uuid"
 )
@@ -65,7 +65,7 @@ func (h *Handlers) createOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createOrgRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -181,7 +181,7 @@ func (h *Handlers) changeRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req changeRoleRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := httpjson.Decode(r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_body", "invalid request body")
 		return
 	}
@@ -237,19 +237,6 @@ func toOrgResponse(o Organization, role Role) orgResponse {
 		resp.Role = string(role)
 	}
 	return resp
-}
-
-func decodeJSON(r *http.Request, dst any) error {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
-		return err
-	}
-	var extra json.RawMessage
-	if err := dec.Decode(&extra); err != io.EOF {
-		return errors.New("trailing json")
-	}
-	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

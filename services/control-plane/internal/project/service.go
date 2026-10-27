@@ -146,7 +146,7 @@ func (s *Service) UpdateProject(ctx context.Context, principal auth.Principal, o
 		}
 		in.Description = &d
 	}
-	return s.repo.UpdateProject(ctx, orgID, projectID, in.DisplayName, in.Description)
+	return s.repo.UpdateProject(ctx, orgID, projectID, principal.UserID, requestid.FromContext(ctx), in.DisplayName, in.Description)
 }
 
 func (s *Service) ArchiveProject(ctx context.Context, principal auth.Principal, orgID, projectID uuid.UUID) error {
