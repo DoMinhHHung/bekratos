@@ -122,6 +122,10 @@ fn production_rejects_simulated_email_delivery() {
         assert_config_error("production requires MAIL_PROVIDER=resend");
         env::set_var("MAIL_PROVIDER", "resend");
         env::set_var("MAIL_API_KEY", "synthetic-config-test-mail-key-012345");
+        env::set_var("MAIL_FROM", "noreply@example.test");
+        env::set_var("APP_PUBLIC_BASE_URL", "https://identity.example.test");
+        assert_config_error("IDENTITY_SERVICE_API_TOKEN is required in production");
+        env::set_var("IDENTITY_SERVICE_API_TOKEN", "synthetic-production-service-token-012345");
         env::set_var("APP_PUBLIC_BASE_URL", "http://identity.example.test");
         assert_config_error("APP_PUBLIC_BASE_URL must use HTTPS");
     });
