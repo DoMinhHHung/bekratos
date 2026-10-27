@@ -35,25 +35,25 @@ func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
 			t.Fatal("request identifiers did not match")
 		}
 		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
-			Outcome: OutcomeSuccess,
-			RequestID: requestID,
-			DeploymentID: deploymentID,
-			EnvironmentID: environmentID,
-			VersionID: versionID,
+			Outcome:              OutcomeSuccess,
+			RequestID:            requestID,
+			DeploymentID:         deploymentID,
+			EnvironmentID:        environmentID,
+			VersionID:            versionID,
 			ReadinessProbePassed: true,
-			ReadinessProbeID: "probe-123",
-			ReadinessObservedAt: time.Now().UTC(),
+			ReadinessProbeID:     "probe-123",
+			ReadinessObservedAt:  time.Now().UTC(),
 		})
 	}))
 	defer server.Close()
 
 	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
-		DeploymentID: deploymentID,
-		EnvironmentID: environmentID,
+		DeploymentID:           deploymentID,
+		EnvironmentID:          environmentID,
 		ConfigurationVersionID: versionID,
-		ProviderRequestID: requestID,
-		TargetMode: TargetMode("shared"),
+		ProviderRequestID:      requestID,
+		TargetMode:             TargetMode("shared"),
 	})
 	if err != nil {
 		t.Fatalf("Provision returned error: %v", err)
@@ -71,25 +71,25 @@ func TestHTTPProviderRejectsMismatchedVersionEvidence(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
-			Outcome: OutcomeSuccess,
-			RequestID: requestID,
-			DeploymentID: deploymentID,
-			EnvironmentID: environmentID,
-			VersionID: uuid.New(),
+			Outcome:              OutcomeSuccess,
+			RequestID:            requestID,
+			DeploymentID:         deploymentID,
+			EnvironmentID:        environmentID,
+			VersionID:            uuid.New(),
 			ReadinessProbePassed: true,
-			ReadinessProbeID: "probe-456",
-			ReadinessObservedAt: time.Now().UTC(),
+			ReadinessProbeID:     "probe-456",
+			ReadinessObservedAt:  time.Now().UTC(),
 		})
 	}))
 	defer server.Close()
 
 	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
-		DeploymentID: deploymentID,
-		EnvironmentID: environmentID,
+		DeploymentID:           deploymentID,
+		EnvironmentID:          environmentID,
 		ConfigurationVersionID: versionID,
-		ProviderRequestID: requestID,
-		TargetMode: TargetMode("shared"),
+		ProviderRequestID:      requestID,
+		TargetMode:             TargetMode("shared"),
 	})
 	if err != nil {
 		t.Fatalf("Provision returned error: %v", err)
@@ -112,11 +112,11 @@ func TestHTTPProviderDoesNotFollowRedirects(t *testing.T) {
 
 	provider := NewHTTPProvider(source.URL, "runtime-secret", time.Second)
 	result, err := provider.Provision(context.Background(), ProvisionRequest{
-		DeploymentID: uuid.New(),
-		EnvironmentID: uuid.New(),
+		DeploymentID:           uuid.New(),
+		EnvironmentID:          uuid.New(),
 		ConfigurationVersionID: uuid.New(),
-		ProviderRequestID: "redirect-test",
-		TargetMode: TargetMode("shared"),
+		ProviderRequestID:      "redirect-test",
+		TargetMode:             TargetMode("shared"),
 	})
 	if err != nil {
 		t.Fatalf("Provision returned error: %v", err)
