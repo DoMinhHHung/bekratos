@@ -461,6 +461,23 @@ WHERE id = $1`, created.Deployment.ID)
 	if got.FailureCode != "max_attempts_exceeded" {
 		t.Fatalf("code=%s", got.FailureCode)
 	}
+	var auditCount int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.failed'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND request_id = $2
+  AND metadata->>'failure_code' = 'max_attempts_exceeded'`,
+		created.Deployment.ID.String(), created.Deployment.ProviderRequestID,
+	).Scan(&auditCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("max-attempt audit rows=%d; want 1", auditCount)
+	}
 	if got.LeaseOwner != nil {
 		t.Fatal("lease must be cleared on terminalize")
 	}
@@ -595,6 +612,20 @@ func TestValidLeaseAllowsMarkReady(t *testing.T) {
 	}
 	if got.Status != StatusReady {
 		t.Fatalf("status=%s", got.Status)
+	}
+	var auditCount int
+	err = pool.QueryRow(ctx, `
+SELECT count(*)
+FROM control_plane_audit_events
+WHERE event_type = 'deployment.ready'
+  AND target_type = 'deployment'
+  AND target_id = $1
+  AND request_id = $2`, created.Deployment.ID.String(), created.Deployment.ProviderRequestID).Scan(&auditCount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("deployment ready audit rows=%d; want 1", auditCount)
 	}
 }
 
@@ -806,6 +837,37 @@ func TestReadyRejectsNonHTTPSURL(t *testing.T) {
 	}
 	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
 		t.Fatalf("status=%s code=%s; want rejected non-HTTPS target", got.Status, got.FailureCode)
+	}
+}
+
+func TestReadyRejectsNoncanonicalNumericHost(t *testing.T) {
+	ctx, pool, _, userID, orgID, projectID, envID, versionID := setupDeployEnv(t)
+	rec := &RecordingProvider{Result: ProvisionResult{
+		Outcome:              OutcomeSuccess,
+		EnvironmentID:        envID,
+		VersionID:            versionID,
+		ReadinessProbePassed: true,
+		ReadinessProbeID:     "numeric-host",
+		ReadinessObservedAt:  time.Now().UTC(),
+		Host:                 "127.1",
+		URL:                  "https://127.1",
+	}}
+	svc := NewService(NewRepository(pool), rec, nil)
+	created, err := svc.Create(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, CreateInput{
+		IdempotencyKey: "numeric-host-" + uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ProcessOnce(ctx, "worker-numeric-host", 30*time.Second, 1); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, auth.Principal{UserID: userID}, orgID, projectID, envID, created.Deployment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FailureCode != "invalid_provider_evidence" {
+		t.Fatalf("status=%s code=%s; want rejected numeric host", got.Status, got.FailureCode)
 	}
 }
 

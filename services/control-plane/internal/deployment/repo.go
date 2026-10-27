@@ -309,7 +309,7 @@ func (r *Repository) Claim(ctx context.Context, workerID string, lease time.Dura
 	now := time.Now().UTC()
 	leaseUntil := now.Add(lease)
 
-	_, err = tx.Exec(ctx, `
+	terminalRows, err := tx.Query(ctx, `
 UPDATE deployments
 SET status = 'failed',
     failure_code = 'max_attempts_exceeded',
@@ -321,11 +321,36 @@ SET status = 'failed',
     next_attempt_at = $1
 WHERE status IN ('queued', 'provisioning')
   AND attempt_count >= max_attempts
-  AND (lease_expires_at IS NULL OR lease_expires_at < $1)`,
+  AND (lease_expires_at IS NULL OR lease_expires_at < $1)
+RETURNING id, environment_id, configuration_version_id, provider_request_id, attempt_count, max_attempts`,
 		now,
 	)
 	if err != nil {
 		return nil, err
+	}
+	var exhausted []Deployment
+	for terminalRows.Next() {
+		var d Deployment
+		if err := terminalRows.Scan(&d.ID, &d.EnvironmentID, &d.ConfigurationVersionID, &d.ProviderRequestID, &d.AttemptCount, &d.MaxAttempts); err != nil {
+			terminalRows.Close()
+			return nil, err
+		}
+		exhausted = append(exhausted, d)
+	}
+	terminalRows.Close()
+	if err := terminalRows.Err(); err != nil {
+		return nil, err
+	}
+	for _, d := range exhausted {
+		metadata, _ := json.Marshal(map[string]any{
+			"status":        string(StatusFailed),
+			"failure_code":  "max_attempts_exceeded",
+			"attempt_count": d.AttemptCount,
+			"max_attempts":  d.MaxAttempts,
+		})
+		if err := r.insertOutcomeAudit(ctx, tx, d, "deployment.failed", metadata, now); err != nil {
+			return nil, err
+		}
 	}
 
 	rows, err := tx.Query(ctx, `
@@ -453,6 +478,16 @@ func normalizeProviderHost(raw string) (string, error) {
 	if len(labels) < 2 {
 		return "", ErrReadyWithoutEvidence
 	}
+	hasAlphabeticTLD := false
+	for _, ch := range labels[len(labels)-1] {
+		if ch >= 'a' && ch <= 'z' {
+			hasAlphabeticTLD = true
+			break
+		}
+	}
+	if !hasAlphabeticTLD {
+		return "", ErrReadyWithoutEvidence
+	}
 	for _, label := range labels {
 		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return "", ErrReadyWithoutEvidence
@@ -473,6 +508,9 @@ func validateProviderTarget(res ProvisionResult) (*string, *string, error) {
 	var targetHost string
 
 	if rawURL != "" {
+		if len(rawURL) > 2048 {
+			return nil, nil, ErrReadyWithoutEvidence
+		}
 		parsed, err := url.Parse(rawURL)
 		if err != nil || !parsed.IsAbs() || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil || parsed.Opaque != "" || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(rawURL, "#") {
 			return nil, nil, ErrReadyWithoutEvidence

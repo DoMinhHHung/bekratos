@@ -50,7 +50,7 @@ A provider may report success only after checking the deployed target, not merel
 - `readiness_probe_passed = true`;
 - a non-empty `readiness_probe_id` identifying the check;
 - `readiness_observed_at`, a recent timestamp;
-- a validated target host or URL.
+- a validated target host or URL. Returned URLs must use HTTPS, contain no userinfo/query/fragment, stay within the size limit, and match the normalized target host; malformed and noncanonical numeric hosts are rejected.
 
 The Control Plane rejects missing, stale, future-dated, or mismatched evidence. It persists the readiness probe ID and observation timestamp alongside the ready transition. A host or URL alone is insufficient. Migration 013 moves legacy rows marked ready without complete persisted evidence to failed rather than fabricating proof.
 
@@ -69,6 +69,7 @@ The provider may return internal diagnostics, but the Control Plane maps them to
 - Exhausted attempts become terminal `failed`.
 - `ready` requires validated readiness evidence.
 - The unavailable production provider never reports `ready`.
+- A deployment is terminalized as failed when the maximum attempt count is exhausted; this transition is audited transactionally just like provider outcomes.
 
 Suspension/deletion states are reserved for future provider support; they are not currently operational APIs.
 
