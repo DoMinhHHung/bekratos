@@ -48,6 +48,8 @@ type Deployment struct {
 	ProviderURL            *string
 	ProviderHost           *string
 	ProviderRegion         *string
+	ReadinessProbeID       string
+	ReadinessObservedAt    *time.Time
 	CreatedByUserID        uuid.UUID
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
