@@ -378,6 +378,7 @@ RETURNING
 }
 
 func (r *Repository) MarkFailed(ctx context.Context, d Deployment, workerID string, code, message string, terminal bool) error {
+	code, message = safePublicFailure(code)
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -428,7 +429,15 @@ func (r *Repository) MarkReady(ctx context.Context, d Deployment, workerID strin
 	if res.EnvironmentID != d.EnvironmentID || res.VersionID != d.ConfigurationVersionID {
 		return ErrReadyWithoutEvidence
 	}
-	if res.Host == "" && res.URL == "" {
+	if res.RequestID != d.ProviderRequestID || !res.ReadinessProbePassed || strings.TrimSpace(res.ReadinessProbeID) == "" {
+		return ErrReadyWithoutEvidence
+	}
+	observedAt := res.ReadinessObservedAt.UTC()
+	currentTime := time.Now().UTC()
+	if observedAt.IsZero() || observedAt.After(currentTime.Add(5*time.Second)) || currentTime.Sub(observedAt) > 2*time.Minute {
+		return ErrReadyWithoutEvidence
+	}
+	if strings.TrimSpace(res.Host) == "" && strings.TrimSpace(res.URL) == "" {
 		return ErrReadyWithoutEvidence
 	}
 	tx, err := r.pool.Begin(ctx)
@@ -531,9 +540,25 @@ func backoff(attempt int) time.Duration {
 	return d
 }
 
-func sanitizeMessage(s string) string {
-	if len(s) > 512 {
-		return s[:512]
+func safePublicFailure(code string) (string, string) {
+	switch code {
+	case "provider_unavailable":
+		return "provider_unavailable", "deployment provider is unavailable"
+	case "provider_ambiguous":
+		return "provider_ambiguous", "provider outcome is unknown; reconciliation is required"
+	case "provider_retryable":
+		return "provider_retryable", "deployment provider reported a retryable failure"
+	case "provider_failure":
+		return "provider_failure", "deployment provider failed"
+	case "invalid_provider_evidence":
+		return "invalid_provider_evidence", "deployment provider returned invalid readiness evidence"
+	case "provider_unknown":
+		return "provider_unknown", "deployment provider returned an unsupported outcome"
+	case "max_attempts_exceeded":
+		return "max_attempts_exceeded", "deployment exceeded the maximum provider attempts"
+	case "provider_error":
+		return "provider_error", "deployment provider request failed"
+	default:
+		return "provider_error", "deployment provider request failed"
 	}
-	return s
 }
