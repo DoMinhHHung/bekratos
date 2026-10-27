@@ -13,29 +13,29 @@ import (
 )
 
 type Config struct {
-	Host                string
-	Port                int
-	DatabaseURL         string
-	LogLevel            string
-	BodyLimitBytes      int64
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleTimeout         time.Duration
-	ShutdownTimeout     time.Duration
-	ReadinessTimeout    time.Duration
-	MigrateOnStartup    bool
+	Host                 string
+	Port                 int
+	DatabaseURL          string
+	LogLevel             string
+	BodyLimitBytes       int64
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	IdleTimeout          time.Duration
+	ShutdownTimeout      time.Duration
+	ReadinessTimeout     time.Duration
+	MigrateOnStartup     bool
 	IdentityJWKSURL      string
 	IdentityProfileURL   string
 	IdentityServiceToken string
 	RuntimeAPIURL        string
 	RuntimeServiceToken  string
 	RuntimeHTTPTimeout   time.Duration
-	JWTIssuer           string
-	JWTAudience         string
-	JWKSCacheTTL        time.Duration
-	JWKSHTTPTimeout     time.Duration
-	JWTLeeway           time.Duration
-	MaxRevocationDelay  time.Duration
+	JWTIssuer            string
+	JWTAudience          string
+	JWKSCacheTTL         time.Duration
+	JWKSHTTPTimeout      time.Duration
+	JWTLeeway            time.Duration
+	MaxRevocationDelay   time.Duration
 }
 
 func Load() (*Config, error) {
