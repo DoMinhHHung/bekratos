@@ -259,8 +259,8 @@ func TestMigrateUpgradesFromPhase8Schema(t *testing.T) {
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 11 {
-		t.Fatalf("latest migration=%d, want 11", latest)
+	if latest != 12 {
+		t.Fatalf("latest migration=%d, want 12", latest)
 	}
 	var deployTable int
 	if err := upgradePool.QueryRow(ctx, `
@@ -269,7 +269,19 @@ WHERE table_schema = current_schema() AND table_name = 'deployments'`).Scan(&dep
 		t.Fatal(err)
 	}
 	if deployTable != 1 {
-		t.Fatal("deployments missing after upgrade to 11")
+		t.Fatal("deployments missing after upgrade to 12")
+	}
+
+	var readinessColumns int
+	if err := upgradePool.QueryRow(ctx, `
+SELECT count(*) FROM information_schema.columns
+WHERE table_schema = current_schema()
+  AND table_name = 'deployments'
+  AND column_name IN ('readiness_probe_id', 'readiness_observed_at')`).Scan(&readinessColumns); err != nil {
+		t.Fatal(err)
+	}
+	if readinessColumns != 2 {
+		t.Fatalf("readiness evidence columns=%d, want 2", readinessColumns)
 	}
 	var cfgTable int
 	if err := upgradePool.QueryRow(ctx, `
@@ -379,8 +391,8 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 	if err := upgradePool.QueryRow(ctx, `SELECT max(version) FROM schema_migrations`).Scan(&latest); err != nil {
 		t.Fatal(err)
 	}
-	if latest != 11 {
-		t.Fatalf("latest migration=%d, want 11", latest)
+	if latest != 12 {
+		t.Fatalf("latest migration=%d, want 12", latest)
 	}
 
 	var apiKeysTable int
@@ -391,7 +403,7 @@ func TestMigrateUpgradesPreviousPhase5Schema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if apiKeysTable != 1 {
-		t.Fatal("api_keys missing after upgrade to 11")
+		t.Fatal("api_keys missing after upgrade to 12")
 	}
 
 	var cfgTable int
