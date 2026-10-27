@@ -207,7 +207,7 @@ impl Config {
                     "SMTP_USERNAME and SMTP_APP_PASSWORD are required when MAIL_PROVIDER=smtp",
                 ));
             }
-            if smtp_username.contains(['\\r', '\\n']) || smtp_app_password.contains(['\\r', '\\n']) {
+            if smtp_username.contains('\r') || smtp_username.contains('\n') || smtp_app_password.contains('\r') || smtp_app_password.contains('\n') {
                 return Err(AppError::config("SMTP credentials contain invalid characters"));
             }
         }
