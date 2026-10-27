@@ -382,6 +382,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejects_smtp_rate_limit_response() {
+        let (client, mut server) = tokio::io::duplex(1024);
+        let server_task = tokio::spawn(async move {
+            server.write_all(b"421 4.7.0 rate limited\r\n").await.unwrap();
+            server.flush().await.unwrap();
+        });
+        let result = smtp_exchange(
+            client,
+            "sender@example.com",
+            "user@example.com",
+            "Verify your email",
+            "body",
+            "user@example.com",
+            "secret-app-password",
+        )
+        .await;
+        assert!(result.is_err());
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn rejects_malformed_and_oversized_smtp_responses() {
         let responses = vec![
             "not an SMTP response\r\n".to_string(),
