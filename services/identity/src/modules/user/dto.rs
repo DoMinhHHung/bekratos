@@ -17,6 +17,14 @@ pub struct ProfileResponse {
     pub timezone: Option<String>,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionValidationResponse {
+    pub subject: Uuid,
+    pub session_id: Uuid,
+    pub account_status: String,
+    pub primary_email_verified: bool,
+}
+
 #[derive(Debug, Deserialize, ToSchema, Validate)]
 pub struct UpdateProfileRequest {
     #[validate(length(max = 120))]
