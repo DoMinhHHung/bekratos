@@ -15,6 +15,7 @@ import (
 func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 	userID := uuid.New()
 	sessionID := uuid.New()
+	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			t.Errorf("method = %s, want GET", r.Method)
@@ -44,13 +45,14 @@ func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 
 func TestIdentityProfileVerifierRejectsRevokedSession(t *testing.T) {
 	userID := uuid.New()
+	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	}))
 	defer server.Close()
 
-	verifier := NewIdentityProfileVerifier(server.URL, time.Second)
-	_, err := verifier.Verify(context.Background(), "Bearer expired-token", userID)
+	verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+	_, err := verifier.Verify(context.Background(), "Bearer expired-token", userID, sessionID)
 	if !errors.Is(err, ErrIdentityUnauthorized) {
 		t.Fatalf("error = %v, want ErrIdentityUnauthorized", err)
 	}
@@ -58,13 +60,14 @@ func TestIdentityProfileVerifierRejectsRevokedSession(t *testing.T) {
 
 func TestIdentityProfileVerifierFailsClosedOnUpstreamFailure(t *testing.T) {
 	userID := uuid.New()
+	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
 
-	verifier := NewIdentityProfileVerifier(server.URL, time.Second)
-	_, err := verifier.Verify(context.Background(), "Bearer platform-token", userID)
+	verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+	_, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, sessionID)
 	if !errors.Is(err, ErrIdentityUnavailable) {
 		t.Fatalf("error = %v, want ErrIdentityUnavailable", err)
 	}
@@ -72,14 +75,15 @@ func TestIdentityProfileVerifierFailsClosedOnUpstreamFailure(t *testing.T) {
 
 func TestIdentityProfileVerifierRejectsOversizedResponse(t *testing.T) {
 	userID := uuid.New()
+	sessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"` + userID.String() + `","status":"active","email_verified":true,"padding":"` + string(make([]byte, maxIdentityProfileBytes)) + `"}`))
+		_, _ = w.Write([]byte(`{"subject":"` + userID.String() + `","session_id":"` + sessionID.String() + `","account_status":"active","primary_email_verified":true,"padding":"` + string(make([]byte, maxIdentityProfileBytes)) + `"}`))
 	}))
 	defer server.Close()
 
-	verifier := NewIdentityProfileVerifier(server.URL, time.Second)
-	_, err := verifier.Verify(context.Background(), "Bearer platform-token", userID)
+	verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+	_, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, sessionID)
 	if !errors.Is(err, ErrIdentityUnavailable) {
 		t.Fatalf("error = %v, want ErrIdentityUnavailable", err)
 	}
