@@ -26,6 +26,9 @@ type Config struct {
 	MigrateOnStartup   bool
 	IdentityJWKSURL    string
 	IdentityProfileURL string
+	RuntimeAPIURL      string
+	RuntimeServiceToken string
+	RuntimeHTTPTimeout time.Duration
 	JWTIssuer          string
 	JWTAudience        string
 	JWKSCacheTTL       time.Duration
@@ -54,6 +57,7 @@ func Load() (*Config, error) {
 		JWKSHTTPTimeout:    3 * time.Second,
 		JWTLeeway:          30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
+		RuntimeHTTPTimeout: 5 * time.Second,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -78,6 +82,20 @@ func Load() (*Config, error) {
 	}
 	if err := validateJWKSURL(cfg.IdentityJWKSURL); err != nil {
 		return nil, err
+	}
+
+	cfg.RuntimeAPIURL = strings.TrimSpace(os.Getenv("RUNTIME_API_URL"))
+	cfg.RuntimeServiceToken = strings.TrimSpace(os.Getenv("RUNTIME_SERVICE_TOKEN"))
+	if cfg.RuntimeAPIURL == "" && cfg.RuntimeServiceToken != "" {
+		return nil, fmt.Errorf("RUNTIME_API_URL is required when RUNTIME_SERVICE_TOKEN is configured")
+	}
+	if cfg.RuntimeAPIURL != "" {
+		if err := validateRuntimeURL(cfg.RuntimeAPIURL); err != nil {
+			return nil, err
+		}
+		if len(cfg.RuntimeServiceToken) < 32 {
+			return nil, fmt.Errorf("RUNTIME_SERVICE_TOKEN must contain at least 32 characters")
+		}
 	}
 
 	cfg.IdentityProfileURL = strings.TrimSpace(os.Getenv("IDENTITY_PROFILE_URL"))
@@ -138,6 +156,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.MaxRevocationDelay, err = parseDurationEnv("MAX_REVOCATION_DELAY", cfg.MaxRevocationDelay); err != nil {
+		return nil, err
+	}
+	if cfg.RuntimeHTTPTimeout, err = parseDurationEnv("RUNTIME_HTTP_TIMEOUT", cfg.RuntimeHTTPTimeout); err != nil {
 		return nil, err
 	}
 
@@ -226,4 +247,24 @@ func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error)
 		return 0, fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return d, nil
+}
+
+func validateRuntimeURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL without credentials, query, or fragment")
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if loopback {
+			return nil
+		}
+		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
+	default:
+		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
+	}
 }
