@@ -61,7 +61,13 @@ impl std::fmt::Debug for Config {
             .field("mail_api_key", &"[REDACTED]")
             .field("mail_api_base_url", &self.mail_api_base_url)
             .field("mail_timeout_secs", &self.mail_timeout_secs)
-            .field("identity_service_api_token", &self.identity_service_api_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "identity_service_api_token",
+                &self
+                    .identity_service_api_token
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -147,7 +153,9 @@ impl Config {
             .trim()
             .to_ascii_lowercase();
         if !matches!(app_env.as_str(), "development" | "test" | "production") {
-            return Err(AppError::config("APP_ENV must be development, test, or production"));
+            return Err(AppError::config(
+                "APP_ENV must be development, test, or production",
+            ));
         }
         let app_public_base_url = env::var("APP_PUBLIC_BASE_URL")
             .map_err(|_| AppError::config("APP_PUBLIC_BASE_URL is required"))?;
@@ -159,7 +167,9 @@ impl Config {
             .trim()
             .to_ascii_lowercase();
         if !matches!(mail_provider.as_str(), "console" | "none" | "resend") {
-            return Err(AppError::config("MAIL_PROVIDER must be console, none, or resend"));
+            return Err(AppError::config(
+                "MAIL_PROVIDER must be console, none, or resend",
+            ));
         }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
         let mail_api_key = env::var("MAIL_API_KEY").unwrap_or_default();
@@ -170,7 +180,9 @@ impl Config {
             .parse()
             .map_err(|_| AppError::config("MAIL_TIMEOUT_SECS must be a valid u64"))?;
         if mail_timeout_secs == 0 || mail_timeout_secs > 120 {
-            return Err(AppError::config("MAIL_TIMEOUT_SECS must be between 1 and 120"));
+            return Err(AppError::config(
+                "MAIL_TIMEOUT_SECS must be between 1 and 120",
+            ));
         }
         if app_env == "production" && mail_provider != "resend" {
             return Err(AppError::config(
@@ -186,10 +198,14 @@ impl Config {
                 || mail_api_key.to_ascii_lowercase().contains("replace-with")
                 || mail_api_key.to_ascii_lowercase().contains("example")
             {
-                return Err(AppError::config("MAIL_API_KEY is required for MAIL_PROVIDER=resend"));
+                return Err(AppError::config(
+                    "MAIL_API_KEY is required for MAIL_PROVIDER=resend",
+                ));
             }
             if !mail_from.contains('@') || mail_from.chars().any(char::is_whitespace) {
-                return Err(AppError::config("MAIL_FROM must be a valid email address for Resend"));
+                return Err(AppError::config(
+                    "MAIL_FROM must be a valid email address for Resend",
+                ));
             }
             validate_http_url(
                 &mail_api_base_url,
@@ -325,23 +341,34 @@ fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
     }
 }
 
-
 fn validate_http_url(raw: &str, name: &str, allow_loopback_http: bool) -> AppResult<()> {
     let uri: http::Uri = raw
         .parse()
         .map_err(|_| AppError::config(format!("{name} must be an absolute HTTP(S) URL")))?;
     let scheme = uri.scheme_str().unwrap_or_default();
     let Some(host) = uri.host() else {
-        return Err(AppError::config(format!("{name} must be an absolute HTTP(S) URL")));
+        return Err(AppError::config(format!(
+            "{name} must be an absolute HTTP(S) URL"
+        )));
     };
-    let authority = uri.authority().map(|value| value.as_str()).unwrap_or_default();
+    let authority = uri
+        .authority()
+        .map(|value| value.as_str())
+        .unwrap_or_default();
     if authority.contains('@') || uri.query().is_some() {
-        return Err(AppError::config(format!("{name} must not contain userinfo, query, or fragment")));
+        return Err(AppError::config(format!(
+            "{name} must not contain userinfo, query, or fragment"
+        )));
     }
-    let loopback = matches!(host.to_ascii_lowercase().as_str(), "localhost" | "127.0.0.1" | "::1");
+    let loopback = matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    );
     match scheme {
         "https" => Ok(()),
         "http" if allow_loopback_http && loopback => Ok(()),
-        _ => Err(AppError::config(format!("{name} must use HTTPS except for loopback hosts"))),
+        _ => Err(AppError::config(format!(
+            "{name} must use HTTPS except for loopback hosts"
+        ))),
     }
 }
