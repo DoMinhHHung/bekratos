@@ -199,6 +199,11 @@ impl Config {
                 "MAIL_API_KEY is required when MAIL_PROVIDER=resend",
             ));
         }
+        if mail_provider == "resend" && !valid_mailbox(&mail_from) {
+            return Err(AppError::config(
+                "MAIL_FROM must be a valid sender email address when MAIL_PROVIDER=resend",
+            ));
+        }
         if mail_provider == "smtp" {
             if smtp_host != "smtp.gmail.com" {
                 return Err(AppError::config("SMTP_HOST must be smtp.gmail.com"));
