@@ -25,10 +25,10 @@ type IdentityProfileVerifier struct {
 }
 
 type identityProfileResponse struct {
-	Subject                string `json:"subject"`
-	SessionID              string `json:"session_id"`
-	AccountStatus          string `json:"account_status"`
-	PrimaryEmailVerified   bool   `json:"primary_email_verified"`
+	Subject              string `json:"subject"`
+	SessionID            string `json:"session_id"`
+	AccountStatus        string `json:"account_status"`
+	PrimaryEmailVerified bool   `json:"primary_email_verified"`
 }
 
 func NewIdentityProfileVerifier(url, serviceToken string, timeout time.Duration) *IdentityProfileVerifier {
@@ -40,6 +40,9 @@ func NewIdentityProfileVerifier(url, serviceToken string, timeout time.Duration)
 		serviceToken: serviceToken,
 		client: &http.Client{
 			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		},
 	}
 }
