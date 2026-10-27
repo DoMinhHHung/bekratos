@@ -161,7 +161,7 @@ impl Config {
         }
 
         let mail_provider = env::var("MAIL_PROVIDER")
-            .unwrap_or_else(|_| "console".to_string())
+            .unwrap_or_else(|_| "none".to_string())
             .to_ascii_lowercase();
         if !matches!(mail_provider.as_str(), "console" | "none" | "resend" | "smtp") {
             return Err(AppError::config(
