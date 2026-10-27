@@ -256,8 +256,8 @@ func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error)
 
 func validateRuntimeURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL without credentials, query, or fragment")
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) origin without credentials, path, query, or fragment")
 	}
 	host := strings.ToLower(u.Hostname())
 	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
