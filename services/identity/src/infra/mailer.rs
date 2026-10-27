@@ -196,7 +196,7 @@ mod tests {
             }
             *captured_server.lock().await = String::from_utf8_lossy(&request).to_string();
             stream
-                .write_all(b"HTTP/1.1 202 Accepted\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}")
+                .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
                 .await
                 .unwrap();
         });
@@ -225,7 +225,7 @@ mod tests {
     }
 
     fn request_body_bounds(request: &[u8]) -> Option<(usize, usize)> {
-        let separator = request.windows(4).position(|window| window == b"\\r\\n\\r\\n")?;
+        let separator = request.windows(4).position(|window| window == b"\r\n\r\n")?;
         let headers = String::from_utf8_lossy(&request[..separator]);
         let content_length = headers.lines().find_map(|line| {
             let (name, value) = line.split_once(':')?;
