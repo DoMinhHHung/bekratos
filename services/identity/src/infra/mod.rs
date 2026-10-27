@@ -7,3 +7,4 @@ pub mod redis;
 pub mod refresh_token;
 pub mod resend;
 pub mod tokens;
+pub mod smtp;
