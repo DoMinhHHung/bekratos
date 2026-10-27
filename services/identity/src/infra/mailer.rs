@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, CONNECTION, HOST};
+use http::header::{AUTHORIZATION, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::{Request, Uri};
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::client::conn::http1;
@@ -63,7 +63,9 @@ impl ResendMailer {
         let uri: Uri = endpoint.parse().map_err(|_| AppError::Unavailable)?;
         let scheme = uri.scheme_str().ok_or(AppError::Unavailable)?;
         let host = uri.host().ok_or(AppError::Unavailable)?;
-        let port = uri.port_u16().unwrap_or(if scheme == "https" { 443 } else { 80 });
+        let port = uri
+            .port_u16()
+            .unwrap_or(if scheme == "https" { 443 } else { 80 });
         if !matches!(scheme, "https" | "http") {
             return Err(AppError::Unavailable);
         }
@@ -89,10 +91,9 @@ impl ResendMailer {
             Box::new(stream)
         };
 
-        let (mut sender, connection) =
-            http1::handshake::<_, Full<Bytes>>(TokioIo::new(io))
-                .await
-                .map_err(|_| AppError::Unavailable)?;
+        let (mut sender, connection) = http1::handshake::<_, Full<Bytes>>(TokioIo::new(io))
+            .await
+            .map_err(|_| AppError::Unavailable)?;
         tokio::spawn(async move {
             if connection.await.is_err() {
                 tracing::debug!("mail provider HTTP connection closed");
@@ -107,7 +108,10 @@ impl ResendMailer {
         }))
         .map_err(|_| AppError::Unavailable)?;
         let host_header = uri.authority().ok_or(AppError::Unavailable)?.as_str();
-        let path = uri.path_and_query().map(|value| value.as_str()).unwrap_or("/");
+        let path = uri
+            .path_and_query()
+            .map(|value| value.as_str())
+            .unwrap_or("/");
         let authorization = format!("Bearer {}", self.api_key);
         let request = Request::builder()
             .method(http::Method::POST)
@@ -131,7 +135,10 @@ impl ResendMailer {
             .map_err(|_| AppError::Unavailable)?;
 
         if !status.is_success() {
-            tracing::warn!(provider_status = status.as_u16(), "mail provider rejected delivery");
+            tracing::warn!(
+                provider_status = status.as_u16(),
+                "mail provider rejected delivery"
+            );
             return Err(AppError::Unavailable);
         }
 
@@ -165,7 +172,6 @@ impl Mailer for NoopMailer {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::{Mailer, OutboundEmail, ResendMailer};
@@ -196,7 +202,9 @@ mod tests {
             }
             *captured_server.lock().await = String::from_utf8_lossy(&request).to_string();
             stream
-                .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .write_all(
+                    b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
                 .await
                 .unwrap();
         });
@@ -225,7 +233,9 @@ mod tests {
     }
 
     fn request_body_bounds(request: &[u8]) -> Option<(usize, usize)> {
-        let separator = request.windows(4).position(|window| window == b"\r\n\r\n")?;
+        let separator = request
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")?;
         let headers = String::from_utf8_lossy(&request[..separator]);
         let content_length = headers.lines().find_map(|line| {
             let (name, value) = line.split_once(':')?;
