@@ -78,3 +78,11 @@ func (r Role) CanReadEnvironment() bool {
 func (r Role) CanArchiveEnvironment() bool {
 	return r == RoleOwner || r == RoleAdmin
 }
+
+func (r Role) CanReadSchema() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper || r == RoleViewer
+}
+
+func (r Role) CanMutateSchema() bool {
+	return r == RoleOwner || r == RoleAdmin || r == RoleDeveloper
+}
