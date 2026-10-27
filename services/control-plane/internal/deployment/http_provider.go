@@ -26,7 +26,7 @@ type runtimeProvisionRequest struct {
 	DeploymentID           uuid.UUID  `json:"deployment_id"`
 	EnvironmentID          uuid.UUID  `json:"environment_id"`
 	ConfigurationVersionID uuid.UUID  `json:"configuration_version_id"`
-	IdempotencyKey         string     `json:"idempotency_key"`
+	IdempotencyKey         string     `json:"provider_request_id"`
 	TargetMode             TargetMode `json:"target_mode"`
 }
 
@@ -37,7 +37,7 @@ type runtimeProvisionResponse struct {
 	URL                  string    `json:"url"`
 	Host                 string    `json:"host"`
 	Region               string    `json:"region"`
-	RequestID            string    `json:"request_id"`
+	RequestID            string    `json:"provider_request_id"`
 	DeploymentID         uuid.UUID `json:"deployment_id"`
 	EnvironmentID        uuid.UUID `json:"environment_id"`
 	VersionID            uuid.UUID `json:"configuration_version_id"`
@@ -115,9 +115,6 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	var result runtimeProvisionResponse
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime provider response could not be validated")
-	}
-	if result.RequestID == "" {
-		result.RequestID = req.ProviderRequestID
 	}
 	if result.Outcome == OutcomeSuccess &&
 		(result.DeploymentID != req.DeploymentID ||
