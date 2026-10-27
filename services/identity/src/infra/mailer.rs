@@ -164,3 +164,77 @@ impl Mailer for NoopMailer {
         Err(AppError::Unavailable)
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::{Mailer, OutboundEmail, ResendMailer};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn resend_mailer_posts_email_and_accepts_provider_success() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let captured = Arc::new(tokio::sync::Mutex::new(String::new()));
+        let captured_server = Arc::clone(&captured);
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 2048];
+            loop {
+                let count = stream.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "client closed before completing request");
+                request.extend_from_slice(&chunk[..count]);
+                if let Some((body_start, body_len)) = request_body_bounds(&request) {
+                    if request.len() >= body_start + body_len {
+                        break;
+                    }
+                }
+            }
+            *captured_server.lock().await = String::from_utf8_lossy(&request).to_string();
+            stream
+                .write_all(b"HTTP/1.1 202 Accepted\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\n{}")
+                .await
+                .unwrap();
+        });
+
+        let mailer = ResendMailer::new(
+            "Bekratos <noreply@example.test>".to_string(),
+            "synthetic-resend-api-key-0123456789".to_string(),
+            format!("http://{address}"),
+            Duration::from_secs(2),
+        );
+        mailer
+            .send(OutboundEmail {
+                to: "user@example.test".to_string(),
+                subject: "Verify your email".to_string(),
+                text_body: "Open the single-use verification link".to_string(),
+            })
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        let request = captured.lock().await.to_ascii_lowercase();
+        assert!(request.starts_with("post /emails http/1.1"));
+        assert!(request.contains("authorization: bearer synthetic-resend-api-key-0123456789"));
+        assert!(request.contains("user@example.test"));
+        assert!(request.contains("verify your email"));
+    }
+
+    fn request_body_bounds(request: &[u8]) -> Option<(usize, usize)> {
+        let separator = request.windows(4).position(|window| window == b"\\r\\n\\r\\n")?;
+        let headers = String::from_utf8_lossy(&request[..separator]);
+        let content_length = headers.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.eq_ignore_ascii_case("content-length") {
+                value.trim().parse::<usize>().ok()
+            } else {
+                None
+            }
+        })?;
+        Some((separator + 4, content_length))
+    }
+}
