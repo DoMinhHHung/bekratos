@@ -191,7 +191,6 @@ func TestVerifyActiveRevokedExpired(t *testing.T) {
 		t.Fatalf("revoked verify error=%v", err)
 	}
 
-	past := time.Now().UTC().Add(-time.Hour)
 	expired, err := svc.Create(ctx, principal, orgID, projectID, envID, CreateInput{
 		KeyType:   TypePublishable,
 		Name:      "will-expire",
@@ -200,7 +199,12 @@ func TestVerifyActiveRevokedExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE api_keys SET expires_at = $2 WHERE id = $1`, expired.Record.ID, past); err != nil {
+	pastCreated := time.Now().UTC().Add(-2 * time.Hour)
+	pastExpiry := time.Now().UTC().Add(-time.Hour)
+	if _, err := pool.Exec(ctx, `
+UPDATE api_keys
+SET created_at = $2, expires_at = $3
+WHERE id = $1`, expired.Record.ID, pastCreated, pastExpiry); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Verify(ctx, expired.FullKey); !errors.Is(err, ErrExpired) {
