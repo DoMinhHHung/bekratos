@@ -6,5 +6,5 @@ pub mod password;
 pub mod redis;
 pub mod refresh_token;
 pub mod resend;
-pub mod tokens;
 pub mod smtp;
+pub mod tokens;
