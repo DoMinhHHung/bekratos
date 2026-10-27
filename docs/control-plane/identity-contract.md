@@ -8,7 +8,7 @@ Identity checks the service credential using a constant-time comparison, validat
 
 The service credential is configured as `CONTROL_PLANE_SERVICE_TOKEN` in Identity and `IDENTITY_SERVICE_TOKEN` in Control Plane. Use a randomly generated secret of at least 32 characters, inject it from a secret manager in production, rotate both sides together, and never log it. The example value is local-development-only and is rejected by Identity in production.
 
-Identity returns 401 for an invalid service credential or invalid/inactive user session. Control Plane returns 401 for rejected credentials and 503 for timeout, network failure, non-2xx dependency response other than 401/403, malformed JSON, oversized response, or a response whose subject/session ID does not match. All sensitive management requests fail closed; there is no JWT-only fallback. The HTTP client has a bounded timeout and response size. Keep the service endpoint private and use HTTPS outside loopback development.
+Identity returns 401 for an invalid service credential or invalid/inactive user session, 429 after 1,200 valid service-authenticated checks per 60-second fixed window, and 503 if Redis rate limiting is unavailable. Control Plane returns 401 for rejected credentials or subject/session mismatch and 503 for timeout, network failure, other non-2xx responses, malformed JSON, or oversized response. All sensitive management requests fail closed; there is no JWT-only fallback. The HTTP client has a bounded timeout and response size. Keep the service endpoint private and use HTTPS outside loopback development.
 
 ## Configuration and operations
 
