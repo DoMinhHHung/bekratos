@@ -17,9 +17,10 @@ Phase 9 implements **deployment intent and state** in PostgreSQL, a provider int
 
 `queued` → `provisioning` → `ready` | `failed`
 
-- Ready requires `OutcomeSuccess` **and** matching `environment_id` + `configuration_version_id` **and** non-empty provider host or URL.
-- Timeout / unknown outcome → retry with backoff until `max_attempts`, then terminal `failed`.
-- Unavailable provider → terminal `failed` with code `provider_unavailable`.
+- Ready requires `OutcomeSuccess`, matching deployment/environment/configuration-version IDs, the stable provider request ID, `readiness_probe_passed=true`, a non-empty probe ID, a recent observation timestamp, and a validated HTTPS URL or host. HTTP 200, a URL alone, or a host alone is not readiness evidence.
+- The HTTP adapter bounds time and response size, rejects redirects, and reconciles ambiguous POST outcomes by the stable idempotency key. It retries only when Runtime explicitly confirms `deployment_not_found` and `safe_to_retry=true`; other ambiguous outcomes fail closed.
+- `UnavailableProvider` remains the default when no runtime URL/token is configured. The repository still contains no production Backend Runtime endpoint, so end-to-end provisioning is not available here.
+- Runtime URL and service credentials are operator-provided configuration; production requires HTTPS and a high-entropy service token.
 
 Suspend/delete transitions exist in the schema for future providers; management routes for them are **not** exposed until a real provider supports them.
 
