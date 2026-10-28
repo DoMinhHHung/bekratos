@@ -144,6 +144,9 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 }
 
 func validRuntimeLocation(rawURL, host string) bool {
+	if rawURL == "" && host == "" {
+		return false
+	}
 	if rawURL != "" {
 		u, err := url.Parse(rawURL)
 		if err != nil || !u.IsAbs() || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(rawURL, " \t\r\n") {
