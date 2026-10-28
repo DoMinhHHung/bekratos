@@ -43,6 +43,8 @@ func TestHTTPProviderAcceptsMatchingReadinessEvidence(t *testing.T) {
 			ReadinessProbePassed: true,
 			ReadinessProbeID:     "probe-123",
 			ReadinessObservedAt:  time.Now().UTC(),
+			URL:                  "https://runtime.example/app",
+			Host:                 "runtime.example",
 		})
 	}))
 	defer server.Close()
@@ -141,6 +143,7 @@ func TestHTTPProviderRejectsUnsafeRuntimeLocations(t *testing.T) {
 		{name: "fragment", url: "https://runtime.example/app#fragment"},
 		{name: "host mismatch", url: "https://runtime.example/app", host: "attacker.example"},
 		{name: "invalid host", host: "runtime.example/path"},
+		{name: "missing location"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -239,6 +242,8 @@ func TestHTTPProviderReconcilesByIdempotencyKey(t *testing.T) {
 			ReadinessProbePassed: true,
 			ReadinessProbeID:     "probe-reconcile",
 			ReadinessObservedAt:  time.Now().UTC(),
+			URL:                  "https://runtime.example/app",
+			Host:                 "runtime.example",
 		})
 	}))
 	defer server.Close()
