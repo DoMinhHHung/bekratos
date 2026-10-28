@@ -246,11 +246,7 @@ impl Config {
                 "production requires MAIL_PROVIDER=resend or smtp",
             ));
         }
-        if app_env == "production" && !app_public_base_url.starts_with("https://") {
-            return Err(AppError::config(
-                "production requires HTTPS APP_PUBLIC_BASE_URL",
-            ));
-        }
+        validate_public_base_url(&app_public_base_url, &app_env)?;
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
             .unwrap_or_else(|_| "19456".to_string())
@@ -347,6 +343,33 @@ impl Config {
             jwks_cache_ttl_secs,
         })
     }
+}
+
+fn validate_public_base_url(value: &str, app_env: &str) -> AppResult<()> {
+    if value.trim() != value || value.contains('#') || value.chars().any(char::is_control) {
+        return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment"));
+    }
+    let uri: http::Uri = value
+        .parse()
+        .map_err(|_| AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment"))?;
+    let scheme = uri.scheme_str().unwrap_or_default();
+    let authority = uri
+        .authority()
+        .ok_or_else(|| AppError::config("APP_PUBLIC_BASE_URL must include a hostname"))?;
+    if !matches!(scheme, "http" | "https")
+        || authority.host().is_empty()
+        || authority.as_str().contains('@')
+        || uri.path_and_query().and_then(|path| path.query()).is_some()
+        || uri.path().split('/').any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without credentials, query, or fragment"));
+    }
+    let host = authority.host().to_ascii_lowercase();
+    let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+    if scheme != "https" && (app_env == "production" || !loopback) {
+        return Err(AppError::config("APP_PUBLIC_BASE_URL must use HTTPS except for loopback development"));
+    }
+    Ok(())
 }
 
 fn valid_mailbox(value: &str) -> bool {
