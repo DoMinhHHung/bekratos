@@ -81,9 +81,9 @@ func TestIdentityProfileVerifierRejectsMismatchedSession(t *testing.T) {
 	serverSessionID := uuid.New()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"subject": userID.String(),
-			"session_id": serverSessionID.String(),
-			"account_status": "active",
+			"subject":                userID.String(),
+			"session_id":             serverSessionID.String(),
+			"account_status":         "active",
 			"primary_email_verified": true,
 		})
 	}))
