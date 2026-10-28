@@ -128,3 +128,93 @@ func TestHTTPProviderDoesNotFollowRedirects(t *testing.T) {
 		t.Fatalf("outcome = %q, want failure for redirect", result.Outcome)
 	}
 }
+
+
+func TestHTTPProviderRejectsUnsafeRuntimeLocations(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		host string
+	}{
+		{name: "javascript scheme", url: "javascript:alert(1)"},
+		{name: "userinfo", url: "https://user:password@runtime.example/app"},
+		{name: "query", url: "https://runtime.example/app?token=secret"},
+		{name: "fragment", url: "https://runtime.example/app#fragment"},
+		{name: "host mismatch", url: "https://runtime.example/app", host: "attacker.example"},
+		{name: "invalid host", host: "runtime.example/path"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deploymentID := uuid.New()
+			environmentID := uuid.New()
+			versionID := uuid.New()
+			requestID := "runtime-location-test"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
+					Outcome:              OutcomeSuccess,
+					RequestID:            requestID,
+					DeploymentID:         deploymentID,
+					EnvironmentID:        environmentID,
+					VersionID:            versionID,
+					ReadinessProbePassed: true,
+					ReadinessProbeID:     "probe-123",
+					ReadinessObservedAt:  time.Now().UTC(),
+					URL:                  tc.url,
+					Host:                 tc.host,
+				})
+			}))
+			defer server.Close()
+			provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+			result, err := provider.Provision(context.Background(), ProvisionRequest{
+				DeploymentID:           deploymentID,
+				EnvironmentID:          environmentID,
+				ConfigurationVersionID: versionID,
+				ProviderRequestID:      requestID,
+				TargetMode:             TargetModeShared,
+			})
+			if err != nil {
+				t.Fatalf("Provision returned error: %v", err)
+			}
+			if result.Outcome != OutcomeAmbiguous || result.ReadinessProbePassed {
+				t.Fatalf("unsafe runtime location was not rejected: %#v", result)
+			}
+		})
+	}
+}
+
+func TestHTTPProviderAcceptsSafeRuntimeLocation(t *testing.T) {
+	deploymentID := uuid.New()
+	environmentID := uuid.New()
+	versionID := uuid.New()
+	requestID := "runtime-location-safe"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
+			Outcome:              OutcomeSuccess,
+			RequestID:            requestID,
+			DeploymentID:         deploymentID,
+			EnvironmentID:        environmentID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "probe-123",
+			ReadinessObservedAt:  time.Now().UTC(),
+			URL:                  "https://runtime.example/app",
+			Host:                 "runtime.example",
+			Region:               "ap-southeast-1",
+		})
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+	result, err := provider.Provision(context.Background(), ProvisionRequest{
+		DeploymentID:           deploymentID,
+		EnvironmentID:          environmentID,
+		ConfigurationVersionID: versionID,
+		ProviderRequestID:      requestID,
+		TargetMode:             TargetModeShared,
+	})
+	if err != nil {
+		t.Fatalf("Provision returned error: %v", err)
+	}
+	if result.Outcome != OutcomeSuccess {
+		t.Fatalf("outcome = %q, want success", result.Outcome)
+	}
+}
