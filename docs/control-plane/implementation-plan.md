@@ -4,7 +4,7 @@ Một phase mỗi lần, branch riêng từ dev mới nhất, review trước kh
 
 ## Phase 0 — Repository and contracts
 
-Inspect actual branch/tree, root README, Identity routes/JWKS claims, migration, CI and ops docs. Record gaps for active-session validation and verified-primary-email. Reconcile docs only.
+Inspect actual branch/tree, root README, Identity routes/JWKS claims, migrations, CI and ops docs. The integration branch now defines `/v1/internal/session` for active-session and verified-primary-email checks; verify that implementation and its tests against the deployed Identity service, and document remaining runtime/deployment gaps. Reconcile docs only.
 
 Acceptance: boundaries, API-key trust model, schema/version lifecycle, security invariants and exclusions are documented; discrepancies are backed by source paths.
 
@@ -18,7 +18,7 @@ Acceptance: gofmt, go vet, go test, go test -race, migration tests, Docker build
 
 Add JWT/JWKS validation with fixed algorithm allow-list, exact issuer/audience, exp/nbf/sub/sid/kid checks, bounded JWKS refresh and explicit active-session contract. Add principal context and authorization foundations. Never trust X-User-ID. Do not claim signature validation alone detects session revocation.
 
-Blocking decision: add/test a trusted Identity session introspection contract or explicitly accept token-expiry-bounded revocation delay. Invitation acceptance needs trusted verified-primary-email lookup or a documented alternative.
+The branch implements a trusted Identity session introspection contract and tests the Control Plane verifier. Remaining acceptance work is to run both services together in staging, confirm service-token provisioning/rotation, and ensure any future email-sensitive operation explicitly requires the returned verified-primary-email state. Token-expiry-bounded revocation remains a separate fallback policy, not a replacement for the live session check.
 
 ## Phase 3 — Organizations and memberships
 
