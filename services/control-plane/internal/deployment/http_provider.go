@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -125,7 +127,11 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 			result.ReadinessProbeID == "" ||
 			result.ReadinessObservedAt.IsZero() ||
 			result.ReadinessObservedAt.After(time.Now().Add(30*time.Second)) ||
-			time.Since(result.ReadinessObservedAt) > 2*time.Minute) {
+			time.Since(result.ReadinessObservedAt) > 2*time.Minute ||
+			!validRuntimeLocation(result.URL, result.Host) ||
+			len(result.Region) > 128 ||
+			len(result.Code) > 128 ||
+			len(result.Message) > 1024) {
 		return ProvisionResult{
 			Outcome:   OutcomeAmbiguous,
 			Code:      "invalid_readiness_evidence",
@@ -148,4 +154,51 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 		ReadinessProbeID:     result.ReadinessProbeID,
 		ReadinessObservedAt:  result.ReadinessObservedAt,
 	}, nil
+}
+
+
+func validRuntimeLocation(rawURL, host string) bool {
+	if rawURL != "" {
+		u, err := url.Parse(rawURL)
+		if err != nil || !u.IsAbs() || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(rawURL, " \t\r\n") {
+			return false
+		}
+		if u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname())) {
+			return false
+		}
+		if host != "" && !strings.EqualFold(strings.TrimSuffix(u.Hostname(), "."), strings.TrimSuffix(host, ".")) {
+			return false
+		}
+	}
+	if host == "" {
+		return true
+	}
+	if strings.ContainsAny(host, " /\\?#@\t\r\n") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return true
+	}
+	if host == "localhost" {
+		return true
+	}
+	if len(host) > 253 || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.ToLower(host)
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
