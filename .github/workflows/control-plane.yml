@@ -59,6 +59,7 @@ jobs:
           if [ -n "$(gofmt -l .)" ]; then
             echo "Code chưa được format chuẩn tại các file sau:"
             gofmt -l .
+            gofmt -d $(gofmt -l .)
             exit 1
           fi
           go vet ./...
