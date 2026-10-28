@@ -118,23 +118,10 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	if err := json.Unmarshal(responseBody, &result); err != nil {
 		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime provider response could not be validated")
 	}
-	if result.Outcome == OutcomeSuccess &&
-		(result.DeploymentID != req.DeploymentID ||
-			result.EnvironmentID != req.EnvironmentID ||
-			result.VersionID != req.ConfigurationVersionID ||
-			result.RequestID != req.ProviderRequestID ||
-			!result.ReadinessProbePassed ||
-			result.ReadinessProbeID == "" ||
-			result.ReadinessObservedAt.IsZero() ||
-			result.ReadinessObservedAt.After(time.Now().Add(30*time.Second)) ||
-			time.Since(result.ReadinessObservedAt) > 2*time.Minute ||
-			!validRuntimeLocation(result.URL, result.Host) ||
-			len(result.Region) > 128 ||
-			len(result.Code) > 128 ||
-			len(result.Message) > 1024) {
+	if !validRuntimeResponse(result, req) {
 		return ProvisionResult{
 			Outcome:   OutcomeAmbiguous,
-			Code:      "invalid_readiness_evidence",
+			Code:      "invalid_runtime_response",
 			RequestID: req.ProviderRequestID,
 		}, nil
 	}
@@ -201,4 +188,87 @@ func validRuntimeLocation(rawURL, host string) bool {
 func isLoopbackHost(host string) bool {
 	host = strings.ToLower(host)
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}
+
+
+func (p *HTTPProvider) Reconcile(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
+	if p == nil || p.baseURL == "" || p.token == "" {
+		return ProvisionResult{Outcome: OutcomeUnavailable, Code: "provider_unavailable", RequestID: req.ProviderRequestID}, ErrProviderUnavailable
+	}
+	endpoint := p.baseURL + "/v1/deployments/by-idempotency-key/" + url.PathEscape(req.ProviderRequestID)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+p.token)
+	httpReq.Header.Set("Accept", "application/json")
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime reconciliation outcome ambiguous")
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxRuntimeResponseBytes+1))
+	if err != nil || len(responseBody) > maxRuntimeResponseBytes {
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime reconciliation response could not be validated")
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		var missing struct {
+			Code        string `json:"code"`
+			SafeToRetry bool   `json:"safe_to_retry"`
+		}
+		if json.Unmarshal(responseBody, &missing) == nil && missing.Code == "deployment_not_found" && missing.SafeToRetry {
+			return ProvisionResult{Outcome: OutcomeRetryable, Code: "deployment_not_found", RequestID: req.ProviderRequestID}, nil
+		}
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime did not provide safe not-found evidence")
+	}
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "provider_ambiguous", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime reconciliation outcome ambiguous")
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ProvisionResult{Outcome: OutcomeFailure, Code: "provider_rejected", RequestID: req.ProviderRequestID}, nil
+	}
+	var result runtimeProvisionResponse
+	if err := json.Unmarshal(responseBody, &result); err != nil || !validRuntimeResponse(result, req) {
+		return ProvisionResult{Outcome: OutcomeAmbiguous, Code: "invalid_runtime_response", RequestID: req.ProviderRequestID}, fmt.Errorf("runtime reconciliation response could not be validated")
+	}
+	return ProvisionResult{
+		Outcome:              result.Outcome,
+		Code:                 result.Code,
+		Message:              result.Message,
+		URL:                  result.URL,
+		Host:                 result.Host,
+		Region:               result.Region,
+		RequestID:            result.RequestID,
+		DeploymentID:         result.DeploymentID,
+		EnvironmentID:        result.EnvironmentID,
+		VersionID:            result.VersionID,
+		ReadinessProbePassed: result.ReadinessProbePassed,
+		ReadinessProbeID:     result.ReadinessProbeID,
+		ReadinessObservedAt:  result.ReadinessObservedAt,
+	}, nil
+}
+
+func validRuntimeResponse(result runtimeProvisionResponse, req ProvisionRequest) bool {
+	if result.RequestID != req.ProviderRequestID ||
+		result.DeploymentID != req.DeploymentID ||
+		result.EnvironmentID != req.EnvironmentID ||
+		result.VersionID != req.ConfigurationVersionID ||
+		len(result.Region) > 128 ||
+		len(result.Code) > 128 ||
+		len(result.Message) > 1024 {
+		return false
+	}
+	switch result.Outcome {
+	case OutcomeSuccess:
+		return result.ReadinessProbePassed &&
+			result.ReadinessProbeID != "" &&
+			!result.ReadinessObservedAt.IsZero() &&
+			!result.ReadinessObservedAt.After(time.Now().Add(30*time.Second)) &&
+			time.Since(result.ReadinessObservedAt) <= 2*time.Minute &&
+			validRuntimeLocation(result.URL, result.Host)
+	case OutcomeFailure, OutcomeRetryable, OutcomeUnavailable, OutcomeAmbiguous:
+		return true
+	default:
+		return false
+	}
 }
