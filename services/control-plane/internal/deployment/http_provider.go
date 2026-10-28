@@ -143,7 +143,6 @@ func (p *HTTPProvider) Provision(ctx context.Context, req ProvisionRequest) (Pro
 	}, nil
 }
 
-
 func validRuntimeLocation(rawURL, host string) bool {
 	if rawURL != "" {
 		u, err := url.Parse(rawURL)
@@ -189,7 +188,6 @@ func isLoopbackHost(host string) bool {
 	host = strings.ToLower(host)
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
-
 
 func (p *HTTPProvider) Reconcile(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
 	if p == nil || p.baseURL == "" || p.token == "" {
