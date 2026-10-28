@@ -50,16 +50,11 @@ pub(crate) async fn validate_internal_session(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<SessionValidationResponse>, AppError> {
-    let expected = state.config.control_plane_service_token.as_bytes();
     let provided = headers
         .get("x-control-plane-service-token")
         .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .as_bytes();
-    if expected.is_empty()
-        || expected.len() != provided.len()
-        || expected.ct_eq(provided).unwrap_u8() != 1
-    {
+        .unwrap_or("");
+    if !valid_service_token(&state.config.control_plane_service_token, provided) {
         return Err(AppError::Unauthorized);
     }
 
@@ -76,6 +71,14 @@ pub(crate) async fn validate_internal_session(
     let token = extract_bearer(&headers)?;
     let session = service::validate_session(&state, token).await?;
     Ok(Json(session))
+}
+
+fn valid_service_token(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+    !expected.is_empty()
+        && expected.len() == provided.len()
+        && expected.ct_eq(provided).unwrap_u8() == 1
 }
 
 pub fn router() -> Router<AppState> {
@@ -241,9 +244,23 @@ pub(crate) async fn delete_account(
 
 #[cfg(test)]
 mod tests {
-    use super::client_ip;
+    use super::{client_ip, valid_service_token};
     use axum::extract::{ConnectInfo, Extension};
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn internal_service_credential_requires_exact_nonempty_match() {
+        assert!(valid_service_token(
+            "service-token-with-enough-entropy",
+            "service-token-with-enough-entropy"
+        ));
+        assert!(!valid_service_token(
+            "service-token-with-enough-entropy",
+            "service-token-with-enough-entropx"
+        ));
+        assert!(!valid_service_token("service-token", ""));
+        assert!(!valid_service_token("", "service-token"));
+    }
 
     #[test]
     fn client_ip_uses_only_the_connection_peer() {
