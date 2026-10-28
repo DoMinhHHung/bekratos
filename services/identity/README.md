@@ -74,13 +74,13 @@ Mã nguồn chính nằm trong `services/identity/src/`, migration trong `servic
 
 Console mailer chỉ ghi metadata và không gửi email thật. Không dùng nó để xác minh delivery production.
 
-## Tích hợp Control Plane — hợp đồng cần chốt
+## Identity ↔ Control Plane contract
 
 Control Plane dùng Identity để xác thực người đăng nhập Dashboard; project end-users là danh tính khác, thuộc Auth module của runtime theo từng project/environment.
 
 Trên nhánh tích hợp, `GET /v1/internal/session` nhận user Bearer token và `X-Control-Plane-Service-Token`. Identity kiểm tra service credential, xác thực JWT, kiểm tra session/user trong PostgreSQL và trả tối thiểu `subject`, `session_id`, `account_status`, `primary_email_verified`. Control Plane so khớp subject/session với JWT đã xác minh và fail closed nếu Identity không khả dụng. Cấu hình cùng một secret ngẫu nhiên tối thiểu 32 ký tự ở `CONTROL_PLANE_SERVICE_TOKEN` và `IDENTITY_SERVICE_TOKEN`; giá trị trong example chỉ dành cho local development.
 
-Contract này có integration/unit test nhưng chưa được xác minh trên hai service đang chạy trong một môi trường deploy thực. Không tin `X-User-ID`, email hoặc role do caller tự truyền.
+Contract này được version hóa bằng route `/v1/internal/session` và có integration/unit test. Chưa có bằng chứng về kiểm thử giữa hai service đang chạy trong môi trường deploy thật. Control Plane phải so khớp subject/session với JWT đã xác minh và fail closed khi Identity từ chối hoặc không khả dụng. Không tin `X-User-ID`, email hoặc role do caller tự truyền.
 
 ## Chạy local
 
@@ -117,8 +117,8 @@ Integration tests cần `DATABASE_URL_TEST` trỏ tới database disposable và 
 
 ## Các việc chưa được khẳng định là hoàn tất
 
-- Gửi email qua provider production.
-- Internal API để các service khác kiểm tra active session hoặc lấy verified primary email một cách đáng tin cậy.
+- Xác minh delivery end-to-end bằng Gmail/Resend credentials và sender domain thật, bao gồm bounce/rejection và cảnh báo vận hành.
+- Kiểm thử contract Identity ↔ Control Plane trên hai service đang chạy cùng môi trường; unit/integration tests không thay thế staging verification.
 - Revocation reconciliation cho access-token deny-list liên service.
 - Backend Runtime và hạ tầng provisioning thật; nhánh này chưa chứng minh deploy end-to-end tới Runtime.\n- Tính đúng đắn end-to-end của từng flow dưới concurrency, lỗi hạ tầng và production configuration.
 - Backup/restore, key rotation diễn tập, incident response và production deployment hardening.
