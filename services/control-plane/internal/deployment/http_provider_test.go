@@ -129,7 +129,6 @@ func TestHTTPProviderDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-
 func TestHTTPProviderRejectsUnsafeRuntimeLocations(t *testing.T) {
 	cases := []struct {
 		name string
@@ -219,7 +218,6 @@ func TestHTTPProviderAcceptsSafeRuntimeLocation(t *testing.T) {
 	}
 }
 
-
 func TestHTTPProviderReconcilesByIdempotencyKey(t *testing.T) {
 	deploymentID := uuid.New()
 	environmentID := uuid.New()
@@ -262,10 +260,10 @@ func TestHTTPProviderReconcilesByIdempotencyKey(t *testing.T) {
 
 func TestHTTPProviderOnlyRetriesWhenRuntimeConfirmsSafeNotFound(t *testing.T) {
 	cases := []struct {
-		name       string
-		body       string
-		want       Outcome
-		wantErr    bool
+		name	string
+		body	string
+		want	Outcome
+		wantErr	bool
 	}{
 		{name: "confirmed safe not found", body: `{"code":"deployment_not_found","safe_to_retry":true}`, want: OutcomeRetryable},
 		{name: "unknown 404", body: `{"message":"not found"}`, want: OutcomeAmbiguous, wantErr: true},
