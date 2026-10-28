@@ -163,6 +163,45 @@ func TestAcceptHTTPSJWKS(t *testing.T) {
 	}
 }
 
+func TestRejectUnsafeIdentityEndpointURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{name: "userinfo", url: "https://user:password@identity.example/v1/jwks"},
+		{name: "query", url: "https://identity.example/v1/jwks?target=internal"},
+		{name: "fragment", url: "https://identity.example/v1/jwks#fragment"},
+		{name: "whitespace", url: "https://identity.example/v1/jwks "},
+		{name: "invalid port", url: "https://identity.example:99999/v1/jwks"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("IDENTITY_JWKS_URL", tc.url)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected unsafe Identity URL to be rejected")
+			}
+		})
+	}
+}
+
+func TestRejectUnsafeIdentityProfileURL(t *testing.T) {
+	cases := []string{
+		"https://user:password@identity.example/v1/internal/session",
+		"https://identity.example/v1/internal/session?redirect=https://attacker.example",
+		"https://identity.example/v1/internal/session#fragment",
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("IDENTITY_PROFILE_URL", raw)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected unsafe Identity profile URL to be rejected")
+			}
+		})
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(substr) == 0 || (len(s) >= len(substr) && indexOf(s, substr) >= 0)
 }
