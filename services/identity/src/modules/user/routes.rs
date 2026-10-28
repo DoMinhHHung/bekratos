@@ -259,7 +259,10 @@ mod tests {
             "service-token-with-enough-entropx"
         ));
         assert!(!valid_service_token("service-token", ""));
-        assert!(!valid_service_token("service-token", "different-length-token"));
+        assert!(!valid_service_token(
+            "service-token",
+            "different-length-token"
+        ));
         assert!(!valid_service_token("", "service-token"));
     }
 
