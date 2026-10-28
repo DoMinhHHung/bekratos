@@ -260,10 +260,10 @@ func TestHTTPProviderReconcilesByIdempotencyKey(t *testing.T) {
 
 func TestHTTPProviderOnlyRetriesWhenRuntimeConfirmsSafeNotFound(t *testing.T) {
 	cases := []struct {
-		name	string
-		body	string
-		want	Outcome
-		wantErr	bool
+		name    string
+		body    string
+		want    Outcome
+		wantErr bool
 	}{
 		{name: "confirmed safe not found", body: `{"code":"deployment_not_found","safe_to_retry":true}`, want: OutcomeRetryable},
 		{name: "unknown 404", body: `{"message":"not found"}`, want: OutcomeAmbiguous, wantErr: true},
