@@ -218,3 +218,83 @@ func TestHTTPProviderAcceptsSafeRuntimeLocation(t *testing.T) {
 		t.Fatalf("outcome = %q, want success", result.Outcome)
 	}
 }
+
+
+func TestHTTPProviderReconcilesByIdempotencyKey(t *testing.T) {
+	deploymentID := uuid.New()
+	environmentID := uuid.New()
+	versionID := uuid.New()
+	requestID := "reconcile-idempotency-123"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/deployments/by-idempotency-key/"+requestID {
+			t.Errorf("request = %s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer runtime-secret" {
+			t.Error("missing Runtime service authorization")
+		}
+		_ = json.NewEncoder(w).Encode(runtimeProvisionResponse{
+			Outcome:              OutcomeSuccess,
+			RequestID:            requestID,
+			DeploymentID:         deploymentID,
+			EnvironmentID:        environmentID,
+			VersionID:            versionID,
+			ReadinessProbePassed: true,
+			ReadinessProbeID:     "probe-reconcile",
+			ReadinessObservedAt:  time.Now().UTC(),
+		})
+	}))
+	defer server.Close()
+	provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+	result, err := provider.Reconcile(context.Background(), ProvisionRequest{
+		DeploymentID:           deploymentID,
+		EnvironmentID:          environmentID,
+		ConfigurationVersionID: versionID,
+		ProviderRequestID:      requestID,
+		TargetMode:             TargetModeShared,
+	})
+	if err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	if result.Outcome != OutcomeSuccess || !result.ReadinessProbePassed || result.RequestID != requestID {
+		t.Fatalf("unexpected reconciliation result: %#v", result)
+	}
+}
+
+func TestHTTPProviderOnlyRetriesWhenRuntimeConfirmsSafeNotFound(t *testing.T) {
+	cases := []struct {
+		name       string
+		body       string
+		want       Outcome
+		wantErr    bool
+	}{
+		{name: "confirmed safe not found", body: `{"code":"deployment_not_found","safe_to_retry":true}`, want: OutcomeRetryable},
+		{name: "unknown 404", body: `{"message":"not found"}`, want: OutcomeAmbiguous, wantErr: true},
+		{name: "unsafe not found", body: `{"code":"deployment_not_found","safe_to_retry":false}`, want: OutcomeAmbiguous, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			provider := NewHTTPProvider(server.URL, "runtime-secret", time.Second)
+			result, err := provider.Reconcile(context.Background(), ProvisionRequest{
+				DeploymentID:           uuid.New(),
+				EnvironmentID:          uuid.New(),
+				ConfigurationVersionID: uuid.New(),
+				ProviderRequestID:      "reconcile-not-found",
+				TargetMode:             TargetModeShared,
+			})
+			if tc.wantErr && err == nil {
+				t.Fatal("expected ambiguous reconciliation error")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Outcome != tc.want {
+				t.Fatalf("outcome = %q, want %q", result.Outcome, tc.want)
+			}
+		})
+	}
+}
