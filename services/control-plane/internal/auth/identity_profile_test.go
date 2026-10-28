@@ -45,6 +45,29 @@ func TestIdentityProfileVerifierReturnsTrustedEmailState(t *testing.T) {
 	}
 }
 
+func TestIdentityProfileVerifierPreservesUnverifiedPrimaryEmail(t *testing.T) {
+	userID := uuid.New()
+	sessionID := uuid.New()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"subject":                userID.String(),
+			"session_id":             sessionID.String(),
+			"account_status":         "active",
+			"primary_email_verified": false,
+		})
+	}))
+	defer server.Close()
+
+	verifier := NewIdentityProfileVerifier(server.URL, "local-test-identity-service-token-32-characters", time.Second)
+	verified, err := verifier.Verify(context.Background(), "Bearer platform-token", userID, sessionID)
+	if err != nil {
+		t.Fatalf("Verify returned error: %v", err)
+	}
+	if verified {
+		t.Fatal("unverified primary email must remain unverified")
+	}
+}
+
 func TestIdentityProfileVerifierRejectsRevokedSession(t *testing.T) {
 	userID := uuid.New()
 	sessionID := uuid.New()
