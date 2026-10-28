@@ -107,6 +107,27 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
 }
 
 #[test]
+fn smtp_provider_accepts_google_app_password_and_rejects_invalid_credentials() {
+    isolated(
+        "smtp_provider_accepts_google_app_password_and_rejects_invalid_credentials",
+        || {
+            env::set_var("MAIL_PROVIDER", "smtp");
+            env::set_var("SMTP_USERNAME", "sender@gmail.com");
+            env::set_var("SMTP_APP_PASSWORD", "abcd efgh ijkl mnop");
+            env::set_var("MAIL_FROM", "sender@gmail.com");
+            let config = Config::from_env().unwrap();
+            assert_eq!(config.smtp_host, "smtp.gmail.com");
+            assert_eq!(config.smtp_port, 465);
+            assert_eq!(config.smtp_username, "sender@gmail.com");
+            assert_eq!(config.smtp_app_password, "abcdefghijklmnop");
+
+            env::set_var("SMTP_APP_PASSWORD", "short");
+            assert_config_error("SMTP_USERNAME must be an email address");
+        },
+    );
+}
+
+#[test]
 fn explicit_settings_override_every_optional_default() {
     isolated("explicit_settings_override_every_optional_default", || {
         for (key, value) in [
