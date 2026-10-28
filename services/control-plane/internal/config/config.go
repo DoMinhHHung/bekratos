@@ -118,6 +118,24 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid IDENTITY_PROFILE_URL")
 	}
 
+	appEnv := strings.ToLower(getEnv("APP_ENV", "development"))
+	switch appEnv {
+	case "development", "test", "production":
+	default:
+		return nil, fmt.Errorf("APP_ENV must be development, test, or production")
+	}
+	if appEnv == "production" {
+		if len(cfg.IdentityServiceToken) < 32 || strings.Contains(strings.ToLower(cfg.IdentityServiceToken), "local-dev-only") {
+			return nil, fmt.Errorf("production requires a non-placeholder IDENTITY_SERVICE_TOKEN of at least 32 characters")
+		}
+		if !usesHTTPS(cfg.IdentityJWKSURL) || !usesHTTPS(cfg.IdentityProfileURL) {
+			return nil, fmt.Errorf("production Identity endpoints must use https")
+		}
+		if cfg.RuntimeAPIURL != "" && !usesHTTPS(cfg.RuntimeAPIURL) {
+			return nil, fmt.Errorf("production RUNTIME_API_URL must use https")
+		}
+	}
+
 	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
 	if cfg.JWTIssuer == "" {
 		return nil, fmt.Errorf("JWT_ISSUER is required")
@@ -278,4 +296,10 @@ func validateRuntimeURL(raw string) error {
 	default:
 		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
 	}
+}
+
+
+func usesHTTPS(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Opaque == "" && u.RawQuery == "" && u.Fragment == ""
 }
