@@ -46,6 +46,10 @@ type Provider interface {
 	Provision(ctx context.Context, req ProvisionRequest) (ProvisionResult, error)
 }
 
+type Reconciler interface {
+	Reconcile(ctx context.Context, req ProvisionRequest) (ProvisionResult, error)
+}
+
 type UnavailableProvider struct{}
 
 func NewUnavailableProvider() *UnavailableProvider {
