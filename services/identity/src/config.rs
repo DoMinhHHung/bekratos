@@ -347,11 +347,15 @@ impl Config {
 
 fn validate_public_base_url(value: &str, app_env: &str) -> AppResult<()> {
     if value.trim() != value || value.contains('#') || value.chars().any(char::is_control) {
-        return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment"));
+        return Err(AppError::config(
+            "APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment",
+        ));
     }
-    let uri: http::Uri = value
-        .parse()
-        .map_err(|_| AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment"))?;
+    let uri: http::Uri = value.parse().map_err(|_| {
+        AppError::config(
+            "APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment",
+        )
+    })?;
     let scheme = uri.scheme_str().unwrap_or_default();
     let authority = uri
         .authority()
@@ -360,14 +364,23 @@ fn validate_public_base_url(value: &str, app_env: &str) -> AppResult<()> {
         || authority.host().is_empty()
         || authority.as_str().contains('@')
         || uri.path_and_query().and_then(|path| path.query()).is_some()
-        || uri.path().split('/').any(|segment| matches!(segment, "." | ".."))
+        || uri
+            .path()
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
     {
         return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without credentials, query, or fragment"));
     }
-    let host = authority.host().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    let host = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
     let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
     if scheme != "https" && (app_env == "production" || !loopback) {
-        return Err(AppError::config("APP_PUBLIC_BASE_URL must use HTTPS except for loopback development"));
+        return Err(AppError::config(
+            "APP_PUBLIC_BASE_URL must use HTTPS except for loopback development",
+        ));
     }
     Ok(())
 }
@@ -398,7 +411,6 @@ fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::validate_public_base_url;
@@ -427,7 +439,10 @@ mod tests {
             "https://identity.example ",
             "https://",
         ] {
-            assert!(validate_public_base_url(value, "production").is_err(), "{value}");
+            assert!(
+                validate_public_base_url(value, "production").is_err(),
+                "{value}"
+            );
         }
     }
 }
