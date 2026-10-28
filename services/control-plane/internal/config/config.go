@@ -298,7 +298,6 @@ func validateRuntimeURL(raw string) error {
 	}
 }
 
-
 func usesHTTPS(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Opaque == "" && u.RawQuery == "" && u.Fragment == ""
