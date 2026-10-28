@@ -224,8 +224,14 @@ func getEnv(key, fallback string) string {
 
 func validateJWKSURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, " \t\r\n") {
+		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL without credentials, query, or fragment")
+	}
+	if port := u.Port(); port != "" {
+		n, parseErr := strconv.Atoi(port)
+		if parseErr != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("IDENTITY_JWKS_URL has an invalid port")
+		}
 	}
 	host := strings.ToLower(u.Hostname())
 	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
