@@ -91,6 +91,30 @@ func (s *Service) processOne(ctx context.Context, workerID string, d Deployment)
 	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer cancel()
 
+	if ctx.Err() != nil || providerErr != nil || res.Outcome == OutcomeAmbiguous {
+		if reconciler, ok := s.provider.(Reconciler); ok {
+			reconcileCtx, reconcileCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			reconciled, reconcileErr := reconciler.Reconcile(reconcileCtx, req)
+			reconcileCancel()
+			if reconcileErr == nil {
+				switch reconciled.Outcome {
+				case OutcomeSuccess:
+					if err := s.repo.MarkReady(persistCtx, d, workerID, reconciled); err != nil {
+						if errors.Is(err, ErrReadyWithoutEvidence) {
+							return s.repo.MarkFailed(persistCtx, d, workerID, "invalid_provider_evidence", "deployment provider returned invalid readiness evidence", true)
+						}
+						return err
+					}
+					return nil
+				case OutcomeRetryable:
+					return s.repo.MarkFailed(persistCtx, d, workerID, "provider_not_found", "Runtime confirmed the idempotency key has no accepted deployment; retry is safe", false)
+				case OutcomeFailure:
+					return s.repo.MarkFailed(persistCtx, d, workerID, "provider_failure", "Runtime reconciliation confirmed deployment failure", true)
+				}
+			}
+		}
+	}
+
 	if ctx.Err() != nil || errors.Is(providerErr, context.DeadlineExceeded) || errors.Is(providerErr, context.Canceled) {
 		return s.repo.MarkFailed(persistCtx, d, workerID, "provider_ambiguous", "provider result ambiguous; reconciliation required", true)
 	}
