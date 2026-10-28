@@ -2,6 +2,17 @@ import { clearTokens, getAccessToken, getRefreshToken, setTokens } from '../lib/
 
 const AUTH_BASE = (import.meta.env.VITE_AUTH_URL || '').replace(/\/$/, '')
 
+function authBaseUrl(): string {
+  if (!AUTH_BASE) throw new Error('VITE_AUTH_URL is required. Set it to the Bekratos Identity API URL.')
+  try {
+    const url = new URL(AUTH_BASE)
+    if (!['http:', 'https:'].includes(url.protocol) || /pizza/i.test(url.hostname)) throw new Error()
+  } catch {
+    throw new Error('VITE_AUTH_URL must be a valid HTTP(S) Bekratos Identity API URL.')
+  }
+  return AUTH_BASE
+}
+
 let refreshInFlight: Promise<boolean> | null = null
 
 export class ApiError extends Error {
@@ -52,13 +63,13 @@ export async function authFetch<T>(
     if (token) headers.set('Authorization', `Bearer ${token}`)
   }
 
-  let res = await fetch(`${AUTH_BASE}${path}`, { ...rest, headers })
+  let res = await fetch(`${authBaseUrl()}${path}`, { ...rest, headers })
 
   if (res.status === 401 && auth && getRefreshToken()) {
     const refreshed = await ensureFreshAccessToken()
     if (refreshed) {
       headers.set('Authorization', `Bearer ${getAccessToken()}`)
-      res = await fetch(`${AUTH_BASE}${path}`, { ...rest, headers })
+      res = await fetch(`${authBaseUrl()}${path}`, { ...rest, headers })
     }
   }
 
@@ -84,7 +95,7 @@ async function tryRefresh(): Promise<boolean> {
   const refreshToken = getRefreshToken()
   if (!refreshToken) return false
   try {
-    const res = await fetch(`${AUTH_BASE}/api/v1/auth/refresh`, {
+    const res = await fetch(`${authBaseUrl()}/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -94,10 +105,14 @@ async function tryRefresh(): Promise<boolean> {
       return false
     }
     const data = (await res.json()) as {
-      accessToken: string
-      refreshToken: string
+      access_token: string
+      refresh_token: string
     }
-    setTokens(data.accessToken, data.refreshToken)
+    if (!data.access_token || !data.refresh_token) {
+      clearTokens()
+      return false
+    }
+    setTokens(data.access_token, data.refresh_token)
     return true
   } catch {
     clearTokens()
@@ -109,21 +124,19 @@ export type RegisterPayload = {
   email: string
   username: string
   password: string
-  fullName: string
+  accept_policy: boolean
+  locale?: string
+  timezone?: string
+  full_name?: string
 }
 
-export type RegisterResult = {
-  id: string
-  email: string
-  fullName: string
-  status: string
-}
+export type RegisterResult = { message: string }
 
 export type TokenResult = {
-  accessToken: string
-  refreshToken: string
-  tokenType: string
-  expiresIn: number
+  access_token: string
+  refresh_token: string
+  token_type: string
+  expires_in: number
 }
 
 export type UserResult = {
@@ -145,13 +158,13 @@ export type UserLookupResult = {
 
 export const authApi = {
   register: (data: RegisterPayload) =>
-    authFetch<RegisterResult>('/api/v1/auth/register', {
+    authFetch<RegisterResult>('/v1/auth/register', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({ ...data, accept_policy: data.accept_policy ?? true, full_name: data.full_name || undefined }),
     }),
 
   login: (identifier: string, password: string) =>
-    authFetch<TokenResult>('/api/v1/auth/login', {
+    authFetch<TokenResult>('/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ login: identifier, password }),
     }),
@@ -160,10 +173,9 @@ export const authApi = {
     const refreshToken = getRefreshToken()
     try {
       if (refreshToken) {
-        await authFetch('/api/v1/auth/logout', {
+        await authFetch('/v1/auth/logout', {
           method: 'POST',
           auth: true,
-          body: JSON.stringify({ refresh_token: refreshToken }),
         })
       }
     } finally {
@@ -174,38 +186,38 @@ export const authApi = {
   me: () => authFetch<UserResult>('/v1/me', { auth: true }),
 
   verifyEmail: (token: string) =>
-    authFetch<{ message: string }>('/api/v1/auth/verify-email', {
+    authFetch<{ message: string }>('/v1/auth/verify-email', {
       method: 'POST',
       body: JSON.stringify({ token }),
     }),
 
   resendVerification: (identifier: string) =>
-    authFetch<{ message: string }>('/api/v1/auth/resend-verification', {
+    authFetch<{ message: string }>('/v1/auth/resend-verification', {
       method: 'POST',
-      body: JSON.stringify({ identifier }),
+      body: JSON.stringify({ email: identifier }),
     }),
 
   forgotPassword: (identifier: string) =>
-    authFetch<{ message: string }>('/api/v1/auth/forgot-password', {
+    authFetch<{ message: string }>('/v1/auth/forgot-password', {
       method: 'POST',
-      body: JSON.stringify({ identifier }),
+      body: JSON.stringify({ email: identifier }),
     }),
 
   resetPassword: (token: string, newPassword: string) =>
-    authFetch<{ message: string }>('/api/v1/auth/reset-password', {
+    authFetch<{ message: string }>('/v1/auth/reset-password', {
       method: 'POST',
-      body: JSON.stringify({ token, newPassword }),
+      body: JSON.stringify({ token, new_password: newPassword }),
     }),
 
   changePassword: (currentPassword: string, newPassword: string) =>
-    authFetch<{ message: string }>('/api/v1/auth/change-password', {
+    authFetch<{ message: string }>('/v1/auth/change-password', {
       method: 'POST',
       auth: true,
-      body: JSON.stringify({ currentPassword, newPassword }),
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
     }),
 
   lookup: (q: string) =>
-    authFetch<UserLookupResult>(`/api/v1/users/lookup?q=${encodeURIComponent(q)}`, {
+    authFetch<UserLookupResult>(`/v1/users/lookup?q=${encodeURIComponent(q)}`, {
       auth: true,
     }),
 
