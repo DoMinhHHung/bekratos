@@ -397,3 +397,37 @@ fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
         Err(_) => Ok(default),
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::validate_public_base_url;
+
+    #[test]
+    fn accepts_https_public_base_url() {
+        assert!(validate_public_base_url("https://identity.example", "production").is_ok());
+        assert!(validate_public_base_url("https://identity.example/auth", "production").is_ok());
+    }
+
+    #[test]
+    fn accepts_loopback_http_only_outside_production() {
+        assert!(validate_public_base_url("http://localhost:8080", "development").is_ok());
+        assert!(validate_public_base_url("http://127.0.0.1:8080", "test").is_ok());
+        assert!(validate_public_base_url("http://localhost:8080", "production").is_err());
+        assert!(validate_public_base_url("http://identity.example", "development").is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_public_base_urls() {
+        for value in [
+            "https://user:password@identity.example",
+            "https://identity.example?next=https://attacker.example",
+            "https://identity.example/#fragment",
+            "https://identity.example/../attacker",
+            "https://identity.example ",
+            "https://",
+        ] {
+            assert!(validate_public_base_url(value, "production").is_err(), "{value}");
+        }
+    }
+}
