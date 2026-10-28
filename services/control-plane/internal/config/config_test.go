@@ -201,7 +201,7 @@ func TestRejectUnsafeIdentityEndpointURLs(t *testing.T) {
 		{name: "userinfo", url: "https://user:password@identity.example/v1/jwks"},
 		{name: "query", url: "https://identity.example/v1/jwks?target=internal"},
 		{name: "fragment", url: "https://identity.example/v1/jwks#fragment"},
-		{name: "whitespace", url: "https://identity.example/v1/jwks "},
+		{name: "embedded whitespace", url: "https://identity.example/v1/jwks path"},
 		{name: "invalid port", url: "https://identity.example:99999/v1/jwks"},
 	}
 	for _, tc := range cases {
