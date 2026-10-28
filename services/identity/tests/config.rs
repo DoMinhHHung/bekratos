@@ -90,7 +90,7 @@ fn required_settings_load_with_documented_defaults_without_connecting_to_service
             assert_eq!(config.body_limit_bytes, 1_048_576);
             assert!(config.readiness_require_db);
             assert!(config.readiness_require_redis);
-            assert_eq!(config.mail_provider, "console");
+            assert_eq!(config.mail_provider, "none");
             assert_eq!(config.mail_from, "noreply@localhost");
             assert_eq!(config.argon2_memory_kib, 19_456);
             assert_eq!(config.argon2_iterations, 2);
