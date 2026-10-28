@@ -163,6 +163,36 @@ func TestAcceptHTTPSJWKS(t *testing.T) {
 	}
 }
 
+func TestProductionRejectsDevelopmentIdentityServiceToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "local-dev-only-not-for-production-identity-service-token")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to reject the development Identity service token")
+	}
+}
+
+func TestProductionRequiresHTTPSIdentityEndpoints(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "production-identity-service-token-with-sufficient-entropy")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to reject loopback HTTP Identity endpoints")
+	}
+}
+
+func TestProductionAcceptsHTTPSIdentityEndpointsAndConfiguredToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
+	t.Setenv("IDENTITY_PROFILE_URL", "https://identity.example/v1/internal/session")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "production-identity-service-token-with-sufficient-entropy")
+	if _, err := Load(); err != nil {
+		t.Fatalf("expected valid production Identity configuration: %v", err)
+	}
+}
+
 func TestRejectUnsafeIdentityEndpointURLs(t *testing.T) {
 	cases := []struct {
 		name string
