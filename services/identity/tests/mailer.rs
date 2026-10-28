@@ -51,6 +51,7 @@ async fn console_mailer_accepts_email_without_logging_the_magic_link_or_token() 
 
     let output = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
     assert!(output.contains("console mailer: email accepted"));
+    assert!(!output.contains("recipient@example.test"));
     assert!(!output.contains(&private_body));
     assert!(!output.contains("https://identity.example.test/verify-email"));
     assert!(!output.contains("synthetic-private-token"));

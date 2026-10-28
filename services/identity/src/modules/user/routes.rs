@@ -4,10 +4,14 @@ use axum::extract::{ConnectInfo, Extension, Path, State};
 use axum::http::HeaderMap;
 use axum::routing::{delete, get};
 use axum::{Json, Router};
+use subtle::ConstantTimeEq;
 use uuid::Uuid;
 use validator::Validate;
 
-use super::dto::{MessageResponse, ProfileResponse, SessionListResponse, UpdateProfileRequest};
+use super::dto::{
+    MessageResponse, ProfileResponse, SessionListResponse, SessionValidationResponse,
+    UpdateProfileRequest,
+};
 use super::service;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -27,8 +31,59 @@ fn extract_bearer(headers: &HeaderMap) -> Result<&str, AppError> {
         .ok_or(AppError::Unauthorized)
 }
 
+#[utoipa::path(
+    get,
+    path = "/v1/internal/session",
+    params(("x-control-plane-service-token" = String, Header, description = "Shared Control Plane service credential")),
+    responses(
+        (status = 200, description = "Active session and verified primary email state", body = SessionValidationResponse),
+        (status = 401, description = "Invalid service credential or inactive user session"),
+        (status = 429, description = "Internal session validation rate limit exceeded"),
+        (status = 503, description = "Rate limiter unavailable"),
+        (status = 429, description = "Internal session validation rate limit exceeded"),
+        (status = 503, description = "Rate limiter unavailable")
+    ),
+    security(("bearer_auth" = [])),
+    tag = "Internal"
+)]
+pub(crate) async fn validate_internal_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<SessionValidationResponse>, AppError> {
+    let provided = headers
+        .get("x-control-plane-service-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("");
+    if !valid_service_token(&state.config.control_plane_service_token, provided) {
+        return Err(AppError::Unauthorized);
+    }
+
+    state
+        .rate_limiter
+        .check_and_incr(
+            "internal_session_validate",
+            "service",
+            &state.config.control_plane_service_token,
+            1200,
+            60,
+        )
+        .await?;
+    let token = extract_bearer(&headers)?;
+    let session = service::validate_session(&state, token).await?;
+    Ok(Json(session))
+}
+
+fn valid_service_token(expected: &str, provided: &str) -> bool {
+    let expected = expected.as_bytes();
+    let provided = provided.as_bytes();
+    !expected.is_empty()
+        && expected.len() == provided.len()
+        && expected.ct_eq(provided).unwrap_u8() == 1
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/v1/internal/session", get(validate_internal_session))
         .route("/v1/me", get(get_profile).patch(update_profile))
         .route("/v1/me/sessions", get(list_sessions).delete(revoke_others))
         .route("/v1/me/sessions/{id}", delete(revoke_one))
@@ -189,9 +244,27 @@ pub(crate) async fn delete_account(
 
 #[cfg(test)]
 mod tests {
-    use super::client_ip;
+    use super::{client_ip, valid_service_token};
     use axum::extract::{ConnectInfo, Extension};
     use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+
+    #[test]
+    fn internal_service_credential_requires_exact_nonempty_match() {
+        assert!(valid_service_token(
+            "service-token-with-enough-entropy",
+            "service-token-with-enough-entropy"
+        ));
+        assert!(!valid_service_token(
+            "service-token-with-enough-entropy",
+            "service-token-with-enough-entropx"
+        ));
+        assert!(!valid_service_token("service-token", ""));
+        assert!(!valid_service_token(
+            "service-token",
+            "different-length-token"
+        ));
+        assert!(!valid_service_token("", "service-token"));
+    }
 
     #[test]
     fn client_ip_uses_only_the_connection_peer() {

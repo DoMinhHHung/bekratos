@@ -5,4 +5,6 @@ pub mod mailer;
 pub mod password;
 pub mod redis;
 pub mod refresh_token;
+pub mod resend;
+pub mod smtp;
 pub mod tokens;

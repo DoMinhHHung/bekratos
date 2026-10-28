@@ -561,6 +561,91 @@ async fn redis_rate_limit_enforces_limit_and_fails_closed() {
 }
 
 #[tokio::test]
+async fn terminal_email_failures_and_expired_tokens_are_not_reclaimed() {
+    let Some(pool) = common::test_pool().await else {
+        eprintln!("DATABASE_URL_TEST not set; skipping email terminal-state test");
+        return;
+    };
+    let user_id = create_user(&pool, "pending").await;
+    let repo = TokenRepo::new(&pool);
+    let permanent_id = Uuid::now_v7();
+    repo.insert(
+        permanent_id,
+        user_id,
+        "email_verify",
+        "terminal-email@example.test",
+        Utc::now() + ChronoDuration::hours(1),
+    )
+    .await
+    .expect("insert permanent-failure token");
+    repo.mark_delivery_permanent_failure(permanent_id, "max_attempts")
+        .await
+        .expect("mark token permanently failed");
+    let (retry_after_expiry, is_scheduled_after_expiry): (chrono::DateTime<Utc>, bool) =
+        sqlx::query_as(
+            "SELECT next_attempt_at, next_attempt_at > now() FROM token.verification_tokens WHERE id = $1",
+        )
+        .bind(permanent_id)
+        .fetch_one(&pool)
+        .await
+        .expect("read terminal token state");
+    let expires_at: chrono::DateTime<Utc> =
+        sqlx::query_scalar("SELECT expires_at FROM token.verification_tokens WHERE id = $1")
+            .bind(permanent_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read token expiry");
+    assert_eq!(retry_after_expiry, expires_at);
+    assert!(is_scheduled_after_expiry);
+
+    let expired_id = Uuid::now_v7();
+    repo.insert(
+        expired_id,
+        user_id,
+        "email_verify",
+        "expired-email@example.test",
+        Utc::now() + ChronoDuration::hours(1),
+    )
+    .await
+    .expect("insert token for expiry test");
+    sqlx::query(
+        "UPDATE token.verification_tokens SET created_at = now() - interval '2 minutes', expires_at = now() - interval '1 minute' WHERE id = $1",
+    )
+    .bind(expired_id)
+    .execute(&pool)
+    .await
+    .expect("expire token after creation");
+    let expired_is_eligible: bool = sqlx::query_scalar(
+        "SELECT expires_at > now() AND consumed_at IS NULL AND revoked_at IS NULL AND sent_at IS NULL FROM token.verification_tokens WHERE id = $1",
+    )
+    .bind(expired_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read expired token state");
+    assert!(!expired_is_eligible);
+    delete_user(&pool, user_id).await;
+}
+
+#[tokio::test]
+async fn email_queue_state_updates_fail_when_token_row_is_missing() {
+    let Some(pool) = common::test_pool().await else {
+        eprintln!("DATABASE_URL_TEST not set; skipping email queue persistence test");
+        return;
+    };
+    let repo = TokenRepo::new(&pool);
+    let missing_id = Uuid::now_v7();
+    assert!(repo.mark_sent(missing_id).await.is_err());
+    assert!(repo
+        .mark_delivery_failure(missing_id, "send_failed", 30)
+        .await
+        .is_err());
+    assert!(repo
+        .mark_delivery_permanent_failure(missing_id, "max_attempts")
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn sent_tokens_are_not_reclaimed_after_mark_sent() {
     let Some(pool) = common::test_pool().await else {
         eprintln!("DATABASE_URL_TEST not set; skipping mark_sent claim test");

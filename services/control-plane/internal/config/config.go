@@ -13,24 +13,29 @@ import (
 )
 
 type Config struct {
-	Host               string
-	Port               int
-	DatabaseURL        string
-	LogLevel           string
-	BodyLimitBytes     int64
-	ReadTimeout        time.Duration
-	WriteTimeout       time.Duration
-	IdleTimeout        time.Duration
-	ShutdownTimeout    time.Duration
-	ReadinessTimeout   time.Duration
-	MigrateOnStartup   bool
-	IdentityJWKSURL    string
-	JWTIssuer          string
-	JWTAudience        string
-	JWKSCacheTTL       time.Duration
-	JWKSHTTPTimeout    time.Duration
-	JWTLeeway          time.Duration
-	MaxRevocationDelay time.Duration
+	Host                 string
+	Port                 int
+	DatabaseURL          string
+	LogLevel             string
+	BodyLimitBytes       int64
+	ReadTimeout          time.Duration
+	WriteTimeout         time.Duration
+	IdleTimeout          time.Duration
+	ShutdownTimeout      time.Duration
+	ReadinessTimeout     time.Duration
+	MigrateOnStartup     bool
+	IdentityJWKSURL      string
+	IdentityProfileURL   string
+	IdentityServiceToken string
+	RuntimeAPIURL        string
+	RuntimeServiceToken  string
+	RuntimeHTTPTimeout   time.Duration
+	JWTIssuer            string
+	JWTAudience          string
+	JWKSCacheTTL         time.Duration
+	JWKSHTTPTimeout      time.Duration
+	JWTLeeway            time.Duration
+	MaxRevocationDelay   time.Duration
 }
 
 func Load() (*Config, error) {
@@ -53,6 +58,7 @@ func Load() (*Config, error) {
 		JWKSHTTPTimeout:    3 * time.Second,
 		JWTLeeway:          30 * time.Second,
 		MaxRevocationDelay: 15 * time.Minute,
+		RuntimeHTTPTimeout: 5 * time.Second,
 	}
 
 	if v := os.Getenv("PORT"); v != "" {
@@ -77,6 +83,57 @@ func Load() (*Config, error) {
 	}
 	if err := validateJWKSURL(cfg.IdentityJWKSURL); err != nil {
 		return nil, err
+	}
+
+	cfg.RuntimeAPIURL = strings.TrimSpace(os.Getenv("RUNTIME_API_URL"))
+	cfg.RuntimeServiceToken = strings.TrimSpace(os.Getenv("RUNTIME_SERVICE_TOKEN"))
+	if cfg.RuntimeAPIURL == "" && cfg.RuntimeServiceToken != "" {
+		return nil, fmt.Errorf("RUNTIME_API_URL is required when RUNTIME_SERVICE_TOKEN is configured")
+	}
+	if cfg.RuntimeAPIURL != "" {
+		if err := validateRuntimeURL(cfg.RuntimeAPIURL); err != nil {
+			return nil, err
+		}
+		if len(cfg.RuntimeServiceToken) < 32 {
+			return nil, fmt.Errorf("RUNTIME_SERVICE_TOKEN must contain at least 32 characters")
+		}
+	}
+
+	cfg.IdentityServiceToken = strings.TrimSpace(os.Getenv("IDENTITY_SERVICE_TOKEN"))
+	if len(cfg.IdentityServiceToken) < 32 {
+		return nil, fmt.Errorf("IDENTITY_SERVICE_TOKEN must contain at least 32 characters")
+	}
+	cfg.IdentityProfileURL = strings.TrimSpace(os.Getenv("IDENTITY_PROFILE_URL"))
+	if cfg.IdentityProfileURL == "" {
+		identityURL, err := url.Parse(cfg.IdentityJWKSURL)
+		if err != nil {
+			return nil, fmt.Errorf("IDENTITY_PROFILE_URL could not be derived from IDENTITY_JWKS_URL")
+		}
+		identityURL.Path = "/v1/internal/session"
+		identityURL.RawQuery = ""
+		identityURL.Fragment = ""
+		cfg.IdentityProfileURL = identityURL.String()
+	}
+	if err := validateJWKSURL(cfg.IdentityProfileURL); err != nil {
+		return nil, fmt.Errorf("invalid IDENTITY_PROFILE_URL")
+	}
+
+	appEnv := strings.ToLower(getEnv("APP_ENV", "development"))
+	switch appEnv {
+	case "development", "test", "production":
+	default:
+		return nil, fmt.Errorf("APP_ENV must be development, test, or production")
+	}
+	if appEnv == "production" {
+		if len(cfg.IdentityServiceToken) < 32 || strings.Contains(strings.ToLower(cfg.IdentityServiceToken), "local-dev-only") {
+			return nil, fmt.Errorf("production requires a non-placeholder IDENTITY_SERVICE_TOKEN of at least 32 characters")
+		}
+		if !usesHTTPS(cfg.IdentityJWKSURL) || !usesHTTPS(cfg.IdentityProfileURL) {
+			return nil, fmt.Errorf("production Identity endpoints must use https")
+		}
+		if cfg.RuntimeAPIURL != "" && !usesHTTPS(cfg.RuntimeAPIURL) {
+			return nil, fmt.Errorf("production RUNTIME_API_URL must use https")
+		}
 	}
 
 	cfg.JWTIssuer = strings.TrimSpace(os.Getenv("JWT_ISSUER"))
@@ -122,6 +179,9 @@ func Load() (*Config, error) {
 		return nil, err
 	}
 	if cfg.MaxRevocationDelay, err = parseDurationEnv("MAX_REVOCATION_DELAY", cfg.MaxRevocationDelay); err != nil {
+		return nil, err
+	}
+	if cfg.RuntimeHTTPTimeout, err = parseDurationEnv("RUNTIME_HTTP_TIMEOUT", cfg.RuntimeHTTPTimeout); err != nil {
 		return nil, err
 	}
 
@@ -182,8 +242,14 @@ func getEnv(key, fallback string) string {
 
 func validateJWKSURL(raw string) error {
 	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL")
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" || strings.TrimSpace(raw) != raw || strings.ContainsAny(raw, " \t\r\n") {
+		return fmt.Errorf("IDENTITY_JWKS_URL must be an absolute http(s) URL without credentials, query, or fragment")
+	}
+	if port := u.Port(); port != "" {
+		n, parseErr := strconv.Atoi(port)
+		if parseErr != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("IDENTITY_JWKS_URL has an invalid port")
+		}
 	}
 	host := strings.ToLower(u.Hostname())
 	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
@@ -210,4 +276,29 @@ func parseDurationEnv(key string, fallback time.Duration) (time.Duration, error)
 		return 0, fmt.Errorf("invalid %s: %q", key, v)
 	}
 	return d, nil
+}
+
+func validateRuntimeURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
+		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) origin without credentials, path, query, or fragment")
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost" || host == "127.0.0.1" || host == "::1"
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if loopback {
+			return nil
+		}
+		return fmt.Errorf("RUNTIME_API_URL must use https except for loopback hosts")
+	default:
+		return fmt.Errorf("RUNTIME_API_URL must be an absolute http(s) URL")
+	}
+}
+
+func usesHTTPS(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.Opaque == "" && u.RawQuery == "" && u.Fragment == ""
 }

@@ -2,7 +2,7 @@
 
 Bekratos là nền tảng Backend-as-a-Service hướng tới no-code/low-code. Người dùng có thể tạo backend bằng cách chọn modules, tùy chỉnh entities, fields và relationships qua Dashboard; developer có thể tích hợp API trực tiếp và tùy chỉnh ứng dụng bằng code.
 
-> Trạng thái tại 26/10/2026: Identity Service có source Rust, migration PostgreSQL, Docker, CI và integration/security tests. Control Plane và Backend Runtime/Data Plane chưa được triển khai. Có source/tests không đồng nghĩa mọi test đã pass hoặc service production-ready; phải kiểm tra CI và xác minh trên môi trường disposable trước release.
+> Trạng thái tại 28/10/2026: Identity có provider email Resend qua HTTPS và Gmail SMTP App Password; Control Plane có contract xác minh active session và verified primary email qua Identity, cùng HTTP adapter/reconciliation contract cho Runtime. Backend Runtime/Data Plane thật vẫn chưa có trong repository; vì vậy chưa có triển khai end-to-end. CI và integration với provider thật vẫn phải được xác minh trước production.
 
 ## Kiến trúc dự kiến
 
@@ -26,7 +26,7 @@ Platform users và project end-users là hai identity domains riêng. Platform J
 
 Xem [Identity Service README](services/identity/README.md) để biết route, cấu hình, mô hình dữ liệu và hạn chế tích hợp. Identity dùng PostgreSQL làm nguồn sự thật cho identity/security state; Redis hiện hỗ trợ rate limiting và chức năng phụ trợ. Access token dùng JWT ES256/JWKS; endpoint JWKS hiện là GET /v1/jwks.
 
-Lưu ý trước khi dùng với người dùng thật: cấu hình ConsoleMailer hiện không gửi email ra ngoài. Cần tích hợp và kiểm thử mail provider thực, đồng thời xác minh CI, migrations, secret handling, failure modes và deploy controls trước production.
+Email delivery có adapter Resend và Gmail SMTP App Password; `console` chỉ dành cho local/test và không gửi email ra ngoài. Cần xác minh CI, migration, secret handling, failure modes, DNS sender authentication và delivery thực tế trước production.
 
 ## Quyết định Control Plane MVP
 

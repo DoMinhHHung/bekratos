@@ -8,12 +8,21 @@ pub struct ProfileResponse {
     pub id: Uuid,
     pub status: String,
     pub email: Option<String>,
+    pub email_verified: bool,
     pub username: Option<String>,
     pub full_name: Option<String>,
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub locale: Option<String>,
     pub timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct SessionValidationResponse {
+    pub subject: Uuid,
+    pub session_id: Uuid,
+    pub account_status: String,
+    pub primary_email_verified: bool,
 }
 
 #[derive(Debug, Deserialize, ToSchema, Validate)]

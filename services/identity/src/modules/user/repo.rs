@@ -14,6 +14,7 @@ pub struct ProfileBundle {
     pub display_name: Option<String>,
     pub avatar_url: Option<String>,
     pub email: Option<String>,
+    pub email_verified: bool,
     pub username: Option<String>,
 }
 
@@ -409,6 +410,7 @@ impl<'a> UserRepo<'a> {
             display_name: Option<String>,
             avatar_url: Option<String>,
             email: Option<String>,
+            email_verified: bool,
             username: Option<String>,
         }
         let row: Option<Bundle> = sqlx::query_as(
@@ -427,6 +429,7 @@ impl<'a> UserRepo<'a> {
                 p.display_name,
                 p.avatar_url,
                 e.email,
+                COALESCE(e.verified_at IS NOT NULL, false) AS email_verified,
                 un.username
             FROM "user".users u
             LEFT JOIN "user".user_profile p ON p.user_id = u.id
@@ -458,6 +461,7 @@ impl<'a> UserRepo<'a> {
             display_name: b.display_name,
             avatar_url: b.avatar_url,
             email: b.email,
+            email_verified: b.email_verified,
             username: b.username,
         }))
     }

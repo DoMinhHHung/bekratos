@@ -18,8 +18,16 @@ pub struct Config {
     pub magic_link_hmac_keys: String,
     pub magic_link_active_kid: String,
     pub app_public_base_url: String,
+    pub app_env: String,
     pub mail_provider: String,
     pub mail_from: String,
+    pub mail_api_key: String,
+    pub mail_timeout_secs: u64,
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_username: String,
+    pub smtp_app_password: String,
+    pub control_plane_service_token: String,
     pub argon2_memory_kib: u32,
     pub argon2_iterations: u32,
     pub argon2_parallelism: u32,
@@ -50,8 +58,16 @@ impl std::fmt::Debug for Config {
             .field("magic_link_hmac_keys", &"[REDACTED]")
             .field("magic_link_active_kid", &self.magic_link_active_kid)
             .field("app_public_base_url", &self.app_public_base_url)
+            .field("app_env", &self.app_env)
             .field("mail_provider", &self.mail_provider)
             .field("mail_from", &self.mail_from)
+            .field("mail_api_key", &"[REDACTED]")
+            .field("mail_timeout_secs", &self.mail_timeout_secs)
+            .field("smtp_host", &self.smtp_host)
+            .field("smtp_port", &self.smtp_port)
+            .field("smtp_username", &"[REDACTED]")
+            .field("smtp_app_password", &"[REDACTED]")
+            .field("control_plane_service_token", &"[REDACTED]")
             .field("argon2_memory_kib", &self.argon2_memory_kib)
             .field("argon2_iterations", &self.argon2_iterations)
             .field("argon2_parallelism", &self.argon2_parallelism)
@@ -137,8 +153,100 @@ impl Config {
         if app_public_base_url.is_empty() {
             return Err(AppError::config("APP_PUBLIC_BASE_URL must not be empty"));
         }
-        let mail_provider = env::var("MAIL_PROVIDER").unwrap_or_else(|_| "console".to_string());
+        let app_env = env::var("APP_ENV")
+            .unwrap_or_else(|_| "development".to_string())
+            .to_ascii_lowercase();
+        if !matches!(app_env.as_str(), "development" | "test" | "production") {
+            return Err(AppError::config(
+                "APP_ENV must be development, test, or production",
+            ));
+        }
+
+        let mail_provider = env::var("MAIL_PROVIDER")
+            .unwrap_or_else(|_| "none".to_string())
+            .to_ascii_lowercase();
+        if !matches!(
+            mail_provider.as_str(),
+            "console" | "none" | "resend" | "smtp"
+        ) {
+            return Err(AppError::config(
+                "MAIL_PROVIDER must be console, none, resend, or smtp",
+            ));
+        }
         let mail_from = env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@localhost".to_string());
+        let mail_api_key = env::var("MAIL_API_KEY").unwrap_or_default();
+        let mail_timeout_secs: u64 = env::var("MAIL_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .map_err(|_| AppError::config("MAIL_TIMEOUT_SECS must be a valid u64"))?;
+        if mail_timeout_secs == 0 || mail_timeout_secs > 60 {
+            return Err(AppError::config(
+                "MAIL_TIMEOUT_SECS must be between 1 and 60",
+            ));
+        }
+        let smtp_host = env::var("SMTP_HOST").unwrap_or_else(|_| "smtp.gmail.com".to_string());
+        let smtp_port: u16 = env::var("SMTP_PORT")
+            .unwrap_or_else(|_| "465".to_string())
+            .parse()
+            .map_err(|_| AppError::config("SMTP_PORT must be a valid u16"))?;
+        let smtp_username = env::var("SMTP_USERNAME").unwrap_or_default();
+        let smtp_app_password = env::var("SMTP_APP_PASSWORD")
+            .unwrap_or_default()
+            .chars()
+            .filter(|c| *c != ' ')
+            .collect::<String>();
+        let control_plane_service_token =
+            env::var("CONTROL_PLANE_SERVICE_TOKEN").unwrap_or_default();
+        if mail_provider == "resend" && mail_api_key.trim().is_empty() {
+            return Err(AppError::config(
+                "MAIL_API_KEY is required when MAIL_PROVIDER=resend",
+            ));
+        }
+        if mail_provider == "resend" && !valid_mailbox(&mail_from) {
+            return Err(AppError::config(
+                "MAIL_FROM must be a valid sender email address when MAIL_PROVIDER=resend",
+            ));
+        }
+        if mail_provider == "smtp" {
+            if smtp_host != "smtp.gmail.com" {
+                return Err(AppError::config("SMTP_HOST must be smtp.gmail.com"));
+            }
+            if smtp_port != 465 {
+                return Err(AppError::config("SMTP_PORT must be 465 for implicit TLS"));
+            }
+            if !valid_mailbox(&smtp_username)
+                || !valid_mailbox(&mail_from)
+                || smtp_app_password.len() != 16
+                || !smtp_app_password.bytes().all(|b| b.is_ascii_alphanumeric())
+            {
+                return Err(AppError::config(
+                    "SMTP_USERNAME must be an email address and SMTP_APP_PASSWORD must be a 16-character Google App Password",
+                ));
+            }
+            if smtp_username.contains('\r')
+                || smtp_username.contains('\n')
+                || smtp_app_password.contains('\r')
+                || smtp_app_password.contains('\n')
+            {
+                return Err(AppError::config(
+                    "SMTP credentials contain invalid characters",
+                ));
+            }
+        }
+        if app_env == "production"
+            && (control_plane_service_token.len() < 32
+                || control_plane_service_token.contains("local-dev-only"))
+        {
+            return Err(AppError::config(
+                "production requires a non-placeholder CONTROL_PLANE_SERVICE_TOKEN of at least 32 characters",
+            ));
+        }
+        if app_env == "production" && !matches!(mail_provider.as_str(), "resend" | "smtp") {
+            return Err(AppError::config(
+                "production requires MAIL_PROVIDER=resend or smtp",
+            ));
+        }
+        validate_public_base_url(&app_public_base_url, &app_env)?;
 
         let argon2_memory_kib: u32 = env::var("ARGON2_MEMORY_KIB")
             .unwrap_or_else(|_| "19456".to_string())
@@ -210,8 +318,16 @@ impl Config {
             magic_link_hmac_keys,
             magic_link_active_kid,
             app_public_base_url,
+            app_env,
             mail_provider,
             mail_from,
+            mail_api_key,
+            mail_timeout_secs,
+            smtp_host,
+            smtp_port,
+            smtp_username,
+            smtp_app_password,
+            control_plane_service_token,
             argon2_memory_kib,
             argon2_iterations,
             argon2_parallelism,
@@ -229,6 +345,59 @@ impl Config {
     }
 }
 
+fn validate_public_base_url(value: &str, app_env: &str) -> AppResult<()> {
+    if value.trim() != value || value.contains('#') || value.chars().any(char::is_control) {
+        return Err(AppError::config(
+            "APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment",
+        ));
+    }
+    let uri: http::Uri = value.parse().map_err(|_| {
+        AppError::config(
+            "APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without query or fragment",
+        )
+    })?;
+    let scheme = uri.scheme_str().unwrap_or_default();
+    let authority = uri
+        .authority()
+        .ok_or_else(|| AppError::config("APP_PUBLIC_BASE_URL must include a hostname"))?;
+    if !matches!(scheme, "http" | "https")
+        || authority.host().is_empty()
+        || authority.as_str().contains('@')
+        || uri.path_and_query().and_then(|path| path.query()).is_some()
+        || uri
+            .path()
+            .split('/')
+            .any(|segment| matches!(segment, "." | ".."))
+    {
+        return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without credentials, query, or fragment"));
+    }
+    let host = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
+    let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
+    if scheme != "https" && (app_env == "production" || !loopback) {
+        return Err(AppError::config(
+            "APP_PUBLIC_BASE_URL must use HTTPS except for loopback development",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_mailbox(value: &str) -> bool {
+    let mut parts = value.split('@');
+    let local = parts.next().unwrap_or_default();
+    let domain = parts.next().unwrap_or_default();
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && parts.next().is_none()
+        && !value
+            .bytes()
+            .any(|b| b.is_ascii_control() || b.is_ascii_whitespace())
+}
+
 fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
     match env::var(key) {
         Ok(v) => match v.to_ascii_lowercase().as_str() {
@@ -239,5 +408,41 @@ fn parse_bool_env(key: &str, default: bool) -> AppResult<bool> {
             ))),
         },
         Err(_) => Ok(default),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_public_base_url;
+
+    #[test]
+    fn accepts_https_public_base_url() {
+        assert!(validate_public_base_url("https://identity.example", "production").is_ok());
+        assert!(validate_public_base_url("https://identity.example/auth", "production").is_ok());
+    }
+
+    #[test]
+    fn accepts_loopback_http_only_outside_production() {
+        assert!(validate_public_base_url("http://localhost:8080", "development").is_ok());
+        assert!(validate_public_base_url("http://127.0.0.1:8080", "test").is_ok());
+        assert!(validate_public_base_url("http://localhost:8080", "production").is_err());
+        assert!(validate_public_base_url("http://identity.example", "development").is_err());
+    }
+
+    #[test]
+    fn rejects_unsafe_public_base_urls() {
+        for value in [
+            "https://user:password@identity.example",
+            "https://identity.example?next=https://attacker.example",
+            "https://identity.example/#fragment",
+            "https://identity.example/../attacker",
+            "https://identity.example ",
+            "https://",
+        ] {
+            assert!(
+                validate_public_base_url(value, "production").is_err(),
+                "{value}"
+            );
+        }
     }
 }

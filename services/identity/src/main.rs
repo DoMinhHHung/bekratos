@@ -8,6 +8,8 @@ use identity::infra::key_crypto::KeyEncryptor;
 use identity::infra::mailer::{ConsoleMailer, Mailer, NoopMailer};
 use identity::infra::password::PasswordPolicy;
 use identity::infra::redis as redis_infra;
+use identity::infra::resend::ResendMailer;
+use identity::infra::smtp::SmtpMailer;
 use identity::infra::tokens::{parse_hmac_keys, MagicLinkSigner};
 use identity::jobs::email_worker::{EmailWorker, EmailWorkerConfig};
 use identity::jobs::purge_accounts::PurgeWorker;
@@ -89,6 +91,19 @@ async fn main() {
         "console" => Arc::new(ConsoleMailer {
             from: config.mail_from.clone(),
         }),
+        "resend" => Arc::new(ResendMailer::new(
+            config.mail_from.clone(),
+            config.mail_api_key.clone(),
+            Duration::from_secs(config.mail_timeout_secs),
+        )),
+        "smtp" => Arc::new(SmtpMailer::new(
+            config.smtp_host.clone(),
+            config.smtp_port,
+            config.smtp_username.clone(),
+            config.smtp_app_password.clone(),
+            config.mail_from.clone(),
+            Duration::from_secs(config.mail_timeout_secs),
+        )),
         _ => Arc::new(NoopMailer),
     };
 

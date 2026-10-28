@@ -3,7 +3,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::modules::session::repo::{RefreshTokenRepo, SessionRepo};
 use crate::modules::user::dto::{
-    ProfileResponse, SessionItem, SessionListResponse, UpdateProfileRequest,
+    ProfileResponse, SessionItem, SessionListResponse, SessionValidationResponse,
+    UpdateProfileRequest,
 };
 use crate::modules::user::repo::UserRepo;
 use crate::state::AppState;
@@ -56,12 +57,31 @@ pub async fn get_profile(state: &AppState, access_token: &str) -> AppResult<Prof
         id: user_id,
         status: bundle.user.status,
         email: bundle.email,
+        email_verified: bundle.email_verified,
         username: bundle.username,
         full_name: bundle.full_name,
         display_name: bundle.display_name,
         avatar_url: bundle.avatar_url,
         locale: bundle.user.locale,
         timezone: bundle.user.timezone,
+    })
+}
+
+pub async fn validate_session(
+    state: &AppState,
+    access_token: &str,
+) -> AppResult<SessionValidationResponse> {
+    let (user_id, session_id) = require_active_session(state, access_token).await?;
+    let bundle = UserRepo::new(&state.db)
+        .load_profile_bundle(user_id)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    Ok(SessionValidationResponse {
+        subject: user_id,
+        session_id,
+        account_status: bundle.user.status,
+        primary_email_verified: bundle.email_verified,
     })
 }
 

@@ -23,7 +23,6 @@ impl Mailer for ConsoleMailer {
     async fn send(&self, email: OutboundEmail) -> AppResult<()> {
         tracing::info!(
             from = %self.from,
-            to = %email.to,
             subject = %email.subject,
             "console mailer: email accepted"
         );

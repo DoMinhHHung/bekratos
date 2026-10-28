@@ -53,3 +53,14 @@ SQLX_OFFLINE=true cargo test --locked --all-targets
 ```
 
 Integration tests skip when their corresponding test service URL is absent. CI supplies disposable PostgreSQL and Redis services, so those checks run there.
+
+
+## Production email delivery
+
+Identity supports either the Resend HTTPS API or Gmail SMTP with an App Password for verification, password-reset, and account-restore messages. Set `APP_ENV=production`, select `MAIL_PROVIDER=resend` or `MAIL_PROVIDER=smtp`, configure `MAIL_FROM`, and inject provider credentials through the deployment secret manager. Production startup rejects console/no-op providers and requires HTTPS `APP_PUBLIC_BASE_URL`.
+
+Resend requires `MAIL_API_KEY` and a verified sender. Gmail SMTP requires `SMTP_USERNAME`, a 16-character `SMTP_APP_PASSWORD`, and the fixed `smtp.gmail.com:465` implicit-TLS endpoint. The Google account must have 2-Step Verification enabled and may need the sender configured as a verified alias. Never use the account's normal password.
+
+Provider acceptance does not prove inbox placement. The durable PostgreSQL token queue retries failures with bounded exponential backoff. A timeout after the remote server accepts a message, or failure to persist `sent_at`, can cause duplicate delivery after lease recovery. Monitor queue age, delivery attempts, authentication failures, provider rejection rates, and expired tokens without logging recipient addresses, message bodies, credentials, SMTP responses, or magic links.
+
+For custom sender domains, verify and publish the provider's SPF and DKIM records and publish a DMARC policy. Avoid multiple conflicting SPF records. Rotate provider credentials through the secret manager, verify the replacement, then revoke the old credential.

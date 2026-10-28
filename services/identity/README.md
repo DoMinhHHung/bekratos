@@ -4,7 +4,7 @@ Identity Service là microservice Rust quản lý tài khoản nền tảng Bekr
 
 > **Phạm vi repo hiện tại:** source tree được kiểm tra trên branch `dev` ngày 2026-10-26 có implementation của `services/identity/`, migration, Docker, CI và integration/security tests. Đây không còn chỉ là repo bootstrap/Phase 0. Tuy nhiên, việc các route tồn tại và tests có trong repo không chứng minh rằng tất cả đã chạy thành công hoặc service đã production-ready. Kiểm tra trạng thái CI thực tế trước khi release.
 
-Control Plane là service tiếp theo trong roadmap; tại thời điểm kiểm tra, `services/control-plane/` chưa có trong repository tree. Control Plane sẽ quản lý organizations/projects/modules/configuration/API-key lifecycle; Identity vẫn là nguồn sự thật cho tài khoản và session của người đăng nhập Dashboard.
+Control Plane hiện nằm trong `services/control-plane/` và quản lý organizations/projects/modules/configuration/API-key lifecycle. Identity vẫn là nguồn sự thật cho tài khoản và session của người đăng nhập Dashboard. Nhánh tích hợp cũng định nghĩa contract kiểm tra active session có service authentication; điều này chưa có nghĩa Runtime thật đã được triển khai.
 
 ## Phạm vi Identity
 
@@ -25,7 +25,7 @@ Các route hiện có trong source:
 | `POST` | `/v1/auth/change-password` | Đổi mật khẩu |
 | `POST` | `/v1/auth/request-restore` | Yêu cầu khôi phục tài khoản đã xóa |
 | `POST` | `/v1/auth/restore` | Xác nhận khôi phục tài khoản |
-| `GET` | `/v1/me` | Xem profile hiện tại |
+| `GET` | `/v1/internal/session` | Contract nội bộ: xác minh active session và trạng thái verified primary email, yêu cầu bearer token và `X-Control-Plane-Service-Token` |\n| `GET` | `/v1/me` | Xem profile hiện tại |
 | `PATCH` | `/v1/me` | Cập nhật profile hiện tại |
 | `GET` | `/v1/me/sessions` | Liệt kê session/thiết bị |
 | `DELETE` | `/v1/me/sessions` | Thu hồi các session khác theo logic hiện tại |
@@ -62,22 +62,25 @@ Mã nguồn chính nằm trong `services/identity/src/`, migration trong `servic
 - Không tin các identity/tenant ID do client tự gửi để xác định quyền truy cập.
 - Không log password, access/refresh token, magic link, cookie, Authorization header, private key hoặc PII không cần thiết.
 
-## Lưu ý về email trong source hiện tại
+## Email delivery
 
-Cấu hình mail hiện được thể hiện dưới dạng `MAIL_PROVIDER=console|none`. `ConsoleMailer` chỉ ghi metadata email vào log và trả thành công; nó **không gửi email ra ngoài**. `NoopMailer` trả lỗi unavailable. Vì vậy, trước khi dùng luồng xác minh/reset/restore cho người dùng thật, cần tích hợp một mail provider thực, có retry/backoff, timeout, quan sát lỗi và chính sách bảo vệ dữ liệu. Không coi console mailer là triển khai production.
+`MAIL_PROVIDER` hỗ trợ `console`, `none`, `resend`, và `smtp`. `console` và `none` chỉ dành cho development/test; production chỉ chấp nhận `resend` hoặc `smtp` và yêu cầu `APP_PUBLIC_BASE_URL` dùng HTTPS.
 
-## Tích hợp Control Plane — hợp đồng cần chốt
+- Resend dùng `MAIL_API_KEY` và HTTPS API.
+- Gmail SMTP dùng `SMTP_HOST=smtp.gmail.com`, `SMTP_PORT=465`, `SMTP_USERNAME` và `SMTP_APP_PASSWORD`. Tài khoản Google cần bật 2-Step Verification và tạo App Password; tài khoản gửi phải được phép dùng địa chỉ `MAIL_FROM`.
+- `MAIL_TIMEOUT_SECS` giới hạn toàn bộ thao tác gửi. SMTP response và message size bị giới hạn; không ghi credential, SMTP response, recipient hoặc magic link vào log.
+- PostgreSQL `token.verification_tokens` vẫn là durable queue; worker dùng lease/retry. Nếu SMTP đã chấp nhận message nhưng ghi `sent_at` thất bại hoặc kết nối timeout sau DATA, email có thể được gửi trùng sau khi lease hết hạn. SMTP acceptance không bảo đảm inbox placement.
+- Domain tùy chỉnh cần SPF, DKIM và DMARC phù hợp với provider; theo dõi bounce/rejection, auth failures, queue age và retry exhaustion.
+
+Console mailer chỉ ghi metadata và không gửi email thật. Không dùng nó để xác minh delivery production.
+
+## Identity ↔ Control Plane contract
 
 Control Plane dùng Identity để xác thực người đăng nhập Dashboard; project end-users là danh tính khác, thuộc Auth module của runtime theo từng project/environment.
 
-Trong source Identity được kiểm tra ngày 2026-10-26:
+Trên nhánh tích hợp, `GET /v1/internal/session` nhận user Bearer token và `X-Control-Plane-Service-Token`. Identity kiểm tra service credential, xác thực JWT, kiểm tra session/user trong PostgreSQL và trả tối thiểu `subject`, `session_id`, `account_status`, `primary_email_verified`. Control Plane so khớp subject/session với JWT đã xác minh và fail closed nếu Identity không khả dụng. Cấu hình cùng một secret ngẫu nhiên tối thiểu 32 ký tự ở `CONTROL_PLANE_SERVICE_TOKEN` và `IDENTITY_SERVICE_TOKEN`; giá trị trong example chỉ dành cho local development.
 
-- Access JWT có các claim cơ bản `sub`, `sid`, `iss`, `aud`, `iat`, `nbf`, `exp`.
-- JWKS route là `GET /v1/jwks`.
-- Chưa thấy route chuyên dụng cho service khác kiểm tra trạng thái session còn hiệu lực.
-- Không nên giả định JWT hiện chứa verified primary email.
-
-Trước khi mở Control Plane cho thao tác quản trị nhạy cảm, cần thiết kế một hợp đồng service-to-service được xác thực để kiểm tra active session và lấy verified-primary-email, hoặc ghi nhận rõ chính sách yếu hơn với thời gian thu hồi tối đa. Không tin `X-User-ID`, email hoặc role do caller tự truyền.
+Contract này được version hóa bằng route `/v1/internal/session` và có integration/unit test. Chưa có bằng chứng về kiểm thử giữa hai service đang chạy trong môi trường deploy thật. Control Plane phải so khớp subject/session với JWT đã xác minh và fail closed khi Identity từ chối hoặc không khả dụng. Không tin `X-User-ID`, email hoặc role do caller tự truyền.
 
 ## Chạy local
 
@@ -114,10 +117,10 @@ Integration tests cần `DATABASE_URL_TEST` trỏ tới database disposable và 
 
 ## Các việc chưa được khẳng định là hoàn tất
 
-- Gửi email qua provider production.
-- Internal API để các service khác kiểm tra active session hoặc lấy verified primary email một cách đáng tin cậy.
+- Xác minh delivery end-to-end bằng Gmail/Resend credentials và sender domain thật, bao gồm bounce/rejection và cảnh báo vận hành.
+- Kiểm thử contract Identity ↔ Control Plane trên hai service đang chạy cùng môi trường; unit/integration tests không thay thế staging verification.
 - Revocation reconciliation cho access-token deny-list liên service.
-- Tính đúng đắn end-to-end của từng flow dưới concurrency, lỗi hạ tầng và production configuration.
+- Backend Runtime và hạ tầng provisioning thật; nhánh này chưa chứng minh deploy end-to-end tới Runtime.\n- Tính đúng đắn end-to-end của từng flow dưới concurrency, lỗi hạ tầng và production configuration.
 - Backup/restore, key rotation diễn tập, incident response và production deployment hardening.
 
 ## Production readiness

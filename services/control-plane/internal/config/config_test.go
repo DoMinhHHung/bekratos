@@ -11,6 +11,7 @@ func setBaseEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://bekratos:bekratos@localhost:5432/bekratos")
 	t.Setenv("IDENTITY_JWKS_URL", "http://localhost:8080/v1/jwks")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "local-dev-only-not-for-production-identity-service-token")
 	t.Setenv("JWT_ISSUER", "https://identity.bekratos.local")
 	t.Setenv("JWT_AUDIENCE", "bekratos-api")
 	t.Setenv("ENV_FILE", "")
@@ -77,7 +78,7 @@ func TestLoadAcceptsLongJWKSCacheTTLWithinConfigurationLimit(t *testing.T) {
 func TestLoadENVFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nIDENTITY_SERVICE_TOKEN=local-dev-only-not-for-production-identity-service-token\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +102,7 @@ func TestLoadENVFile(t *testing.T) {
 func TestEnvOverridesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.env")
-	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
+	content := "DATABASE_URL=postgres://fromfile@localhost/db\nIDENTITY_JWKS_URL=https://jwks.example/v1/jwks\nIDENTITY_SERVICE_TOKEN=local-dev-only-not-for-production-identity-service-token\nJWT_ISSUER=https://iss.example\nJWT_AUDIENCE=aud-example\n"
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +160,75 @@ func TestAcceptHTTPSJWKS(t *testing.T) {
 	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
 	if _, err := Load(); err != nil {
 		t.Fatalf("https should be accepted: %v", err)
+	}
+}
+
+func TestProductionRejectsDevelopmentIdentityServiceToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "local-dev-only-not-for-production-identity-service-token")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to reject the development Identity service token")
+	}
+}
+
+func TestProductionRequiresHTTPSIdentityEndpoints(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "production-identity-service-token-with-sufficient-entropy")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production to reject loopback HTTP Identity endpoints")
+	}
+}
+
+func TestProductionAcceptsHTTPSIdentityEndpointsAndConfiguredToken(t *testing.T) {
+	setBaseEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("IDENTITY_JWKS_URL", "https://identity.example/v1/jwks")
+	t.Setenv("IDENTITY_PROFILE_URL", "https://identity.example/v1/internal/session")
+	t.Setenv("IDENTITY_SERVICE_TOKEN", "production-identity-service-token-with-sufficient-entropy")
+	if _, err := Load(); err != nil {
+		t.Fatalf("expected valid production Identity configuration: %v", err)
+	}
+}
+
+func TestRejectUnsafeIdentityEndpointURLs(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{name: "userinfo", url: "https://user:password@identity.example/v1/jwks"},
+		{name: "query", url: "https://identity.example/v1/jwks?target=internal"},
+		{name: "fragment", url: "https://identity.example/v1/jwks#fragment"},
+		{name: "embedded whitespace", url: "https://identity.example/v1/jwks path"},
+		{name: "invalid port", url: "https://identity.example:99999/v1/jwks"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("IDENTITY_JWKS_URL", tc.url)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected unsafe Identity URL to be rejected")
+			}
+		})
+	}
+}
+
+func TestRejectUnsafeIdentityProfileURL(t *testing.T) {
+	cases := []string{
+		"https://user:password@identity.example/v1/internal/session",
+		"https://identity.example/v1/internal/session?redirect=https://attacker.example",
+		"https://identity.example/v1/internal/session#fragment",
+	}
+	for _, raw := range cases {
+		t.Run(raw, func(t *testing.T) {
+			setBaseEnv(t)
+			t.Setenv("IDENTITY_PROFILE_URL", raw)
+			if _, err := Load(); err == nil {
+				t.Fatal("expected unsafe Identity profile URL to be rejected")
+			}
+		})
 	}
 }
 

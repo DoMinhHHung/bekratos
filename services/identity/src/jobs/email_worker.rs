@@ -61,10 +61,6 @@ impl EmailWorker {
         }
     }
 
-    /// Nhận lease cho một lô token và thử gửi magic link tương ứng.
-    ///
-    /// Truyền lỗi `Internal` khi không nhận được lô; lỗi ký hoặc gửi từng email
-    /// được chuyển thành lịch thử lại. Bỏ qua lỗi lưu kết quả gửi và lịch thử lại.
     async fn tick(&self) -> AppResult<()> {
         let repo = TokenRepo::new(&self.pool);
         let due = repo
@@ -73,43 +69,47 @@ impl EmailWorker {
 
         for row in due {
             if row.delivery_attempts > self.cfg.max_attempts {
-                let _ = repo
-                    .mark_delivery_failure(row.id, "max_attempts", 86_400)
-                    .await;
+                repo.mark_delivery_permanent_failure(row.id, "max_attempts")
+                    .await?;
                 continue;
             }
 
             let link_token = match self.signer.issue(&row.purpose, row.id) {
                 Ok(t) => t,
                 Err(_) => {
-                    let _ = repo.mark_delivery_failure(row.id, "sign_failed", 300).await;
+                    if row.delivery_attempts >= self.cfg.max_attempts {
+                        repo.mark_delivery_permanent_failure(row.id, "sign_failed")
+                            .await?;
+                    } else {
+                        repo.mark_delivery_failure(
+                            row.id,
+                            "sign_failed",
+                            backoff_secs(row.delivery_attempts),
+                        )
+                        .await?;
+                    }
                     continue;
                 }
             };
 
-            let path = match row.purpose.as_str() {
-                "email_verify" => "verify-email",
-                "password_reset" => "reset-password",
-                "account_restore" => "restore-account",
-                _ => "verify-email",
+            let (path, subject) = match row.purpose.as_str() {
+                "email_verify" => ("verify-email", "Verify your email"),
+                "password_reset" => ("reset-password", "Reset your password"),
+                "account_restore" => ("restore-account", "Restore your account"),
+                _ => {
+                    repo.mark_delivery_permanent_failure(row.id, "unsupported_purpose")
+                        .await?;
+                    continue;
+                }
             };
             let url = format!(
                 "{}/{path}?token={link_token}",
                 self.cfg.public_base_url.trim_end_matches('/')
             );
-
-            let subject = match row.purpose.as_str() {
-                "email_verify" => "Verify your email",
-                "password_reset" => "Reset your password",
-                "account_restore" => "Restore your account",
-                _ => "Account notification",
-            };
-
             let body = format!(
                 "Open this link to continue. It expires at {}.\n\n{url}\n",
                 row.expires_at
             );
-
             let email = OutboundEmail {
                 to: row.email.clone(),
                 subject: subject.to_string(),
@@ -118,13 +118,20 @@ impl EmailWorker {
 
             match self.mailer.send(email).await {
                 Ok(()) => {
-                    let _ = repo.mark_sent(row.id).await;
+                    repo.mark_sent(row.id).await?;
                 }
                 Err(_) => {
-                    let backoff = backoff_secs(row.delivery_attempts);
-                    let _ = repo
-                        .mark_delivery_failure(row.id, "send_failed", backoff)
-                        .await;
+                    if row.delivery_attempts >= self.cfg.max_attempts {
+                        repo.mark_delivery_permanent_failure(row.id, "send_failed")
+                            .await?;
+                    } else {
+                        repo.mark_delivery_failure(
+                            row.id,
+                            "send_failed",
+                            backoff_secs(row.delivery_attempts),
+                        )
+                        .await?;
+                    }
                 }
             }
         }
