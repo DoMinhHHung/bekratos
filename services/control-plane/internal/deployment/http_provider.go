@@ -28,7 +28,7 @@ type runtimeProvisionRequest struct {
 	DeploymentID           uuid.UUID  `json:"deployment_id"`
 	EnvironmentID          uuid.UUID  `json:"environment_id"`
 	ConfigurationVersionID uuid.UUID  `json:"configuration_version_id"`
-	IdempotencyKey         string     `json:"provider_request_id"`
+	IdempotencyKey         string     `json:"idempotency_key"`
 	TargetMode             TargetMode `json:"target_mode"`
 }
 
@@ -39,7 +39,7 @@ type runtimeProvisionResponse struct {
 	URL                  string    `json:"url"`
 	Host                 string    `json:"host"`
 	Region               string    `json:"region"`
-	RequestID            string    `json:"provider_request_id"`
+	RequestID            string    `json:"request_id"`
 	DeploymentID         uuid.UUID `json:"deployment_id"`
 	EnvironmentID        uuid.UUID `json:"environment_id"`
 	VersionID            uuid.UUID `json:"configuration_version_id"`
