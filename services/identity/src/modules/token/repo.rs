@@ -232,7 +232,7 @@ impl<'a> TokenRepo<'a> {
         .bind(error_code)
         .execute(self.pool)
         .await
-        .map_err(|e| {
+        .map_err(|_| {
             tracing::error!(%id, "mark delivery permanently failed");
             AppError::Internal
         })?;
