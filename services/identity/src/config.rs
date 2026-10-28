@@ -364,7 +364,7 @@ fn validate_public_base_url(value: &str, app_env: &str) -> AppResult<()> {
     {
         return Err(AppError::config("APP_PUBLIC_BASE_URL must be an absolute HTTP(S) URL without credentials, query, or fragment"));
     }
-    let host = authority.host().to_ascii_lowercase();
+    let host = authority.host().trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
     let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1");
     if scheme != "https" && (app_env == "production" || !loopback) {
         return Err(AppError::config("APP_PUBLIC_BASE_URL must use HTTPS except for loopback development"));
