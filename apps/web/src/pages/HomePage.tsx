@@ -9,7 +9,7 @@ export function HomePage() {
       <div className="g-stage">
         <div className="g-brand">
           <h1>
-            Pizza
+            Bekratos
             <span>Console</span>
           </h1>
         </div>

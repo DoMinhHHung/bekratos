@@ -45,7 +45,7 @@ export function SignUpForm({
   return (
     <>
       <h2 className="g-title">Create Account</h2>
-      <p className="g-lead">Join Pizza to manage organizations and API keys</p>
+      <p className="g-lead">Join Bekratos to manage organizations and API keys</p>
       {error ? <div className="g-alert g-alert-error">{error}</div> : null}
       {success ? (
         <div className="g-alert g-alert-success">{success}</div>

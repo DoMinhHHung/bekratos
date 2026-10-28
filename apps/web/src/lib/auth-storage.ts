@@ -1,5 +1,5 @@
-const ACCESS = 'pizza_access_token'
-const REFRESH = 'pizza_refresh_token'
+const ACCESS = 'bekratos_access_token'
+const REFRESH = 'bekratos_refresh_token'
 
 export function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS)

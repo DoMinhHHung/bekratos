@@ -87,7 +87,7 @@ async function tryRefresh(): Promise<boolean> {
     const res = await fetch(`${AUTH_BASE}/api/v1/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
+      body: JSON.stringify({ refresh_token: refreshToken }),
     })
     if (!res.ok) {
       clearTokens()
@@ -153,7 +153,7 @@ export const authApi = {
   login: (identifier: string, password: string) =>
     authFetch<TokenResult>('/api/v1/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ identifier, password }),
+      body: JSON.stringify({ login: identifier, password }),
     }),
 
   logout: async () => {
@@ -163,7 +163,7 @@ export const authApi = {
         await authFetch('/api/v1/auth/logout', {
           method: 'POST',
           auth: true,
-          body: JSON.stringify({ refreshToken }),
+          body: JSON.stringify({ refresh_token: refreshToken }),
         })
       }
     } finally {
@@ -171,7 +171,7 @@ export const authApi = {
     }
   },
 
-  me: () => authFetch<UserResult>('/api/v1/auth/me', { auth: true }),
+  me: () => authFetch<UserResult>('/v1/me', { auth: true }),
 
   verifyEmail: (token: string) =>
     authFetch<{ message: string }>('/api/v1/auth/verify-email', {

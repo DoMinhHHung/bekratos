@@ -14,7 +14,7 @@ export function AuthCard({ title, lead, children }: Props) {
         <Link to="/" className="brand" style={{ color: 'inherit' }}>
           <div className="brand-mark">P</div>
           <div>
-            <div className="brand-text">Pizza</div>
+            <div className="brand-text">Bekratos</div>
             <div className="brand-sub">Console</div>
           </div>
         </Link>

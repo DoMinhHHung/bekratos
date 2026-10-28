@@ -66,7 +66,7 @@ export function GlassyAuthShell({ mode, onModeChange, signIn, signUp }: Props) {
         <div className="g-brand">
           <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
             <h1>
-              Pizza
+              Bekratos
               <span>Console</span>
             </h1>
           </Link>
@@ -126,7 +126,7 @@ export function GlassySimpleCard({ title, lead, children }: SimpleProps) {
         <div className="g-brand">
           <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }}>
             <h1>
-              Pizza
+              Bekratos
               <span>Console</span>
             </h1>
           </Link>

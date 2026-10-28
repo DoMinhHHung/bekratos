@@ -79,7 +79,7 @@ export function Shell() {
         <div className="sidebar-header">
           <div className="sidebar-brand">
             <div className="brand-mark">P</div>
-            <div className="brand-text">Pizza</div>
+            <div className="brand-text">Bekratos</div>
           </div>
         </div>
         <nav className="sidebar-nav">
