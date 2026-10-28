@@ -37,7 +37,7 @@ The remote implementation must deduplicate requests by `provider_request_id`. Re
 - **Ambiguous:** the request may have caused a side effect, but the provider cannot confirm the result. Do not blindly retry. Reconciliation must query the existing operation by `provider_request_id`.
 - **Unavailable:** no production provider is configured; fail closed.
 
-A network timeout is ambiguous by default. A timeout alone is not proof that the remote operation failed. The current implementation marks ambiguous outcomes terminal and documents reconciliation as not implemented; automatic reconciliation must not be claimed until an actual reconciler and provider lookup API exist.
+A network timeout is ambiguous by default. A timeout alone is not proof that the remote operation failed. The Control Plane HTTP adapter queries `GET /v1/deployments/by-idempotency-key/{provider_request_id}` after an ambiguous result. It only treats a 404 as safe to retry when the response explicitly contains `code=deployment_not_found` and `safe_to_retry=true`; every other uncertain response remains ambiguous and fails closed. This client-side reconciliation contract is implemented and tested against a fake server, but the real Runtime endpoint is absent from this repository, so automatic reconciliation is not operational end-to-end yet.
 
 The Control Plane enforces leases and fencing tokens for local worker ownership. Those controls do not replace remote idempotency: a remote operation can outlive a local worker lease.
 
